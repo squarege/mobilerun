@@ -9,6 +9,17 @@ from mobilerun.agent.providers.registry import (
 from mobilerun.config_manager.config_manager import LLMProfile, MobileConfig
 
 
+def test_anthropic_compatible_variant_accepts_custom_connection_details() -> None:
+    variant = resolve_provider_variant("anthropic_like", "api_key")
+
+    assert variant.id == "AnthropicLike"
+    assert variant.runtime_provider_name == "Anthropic"
+    assert variant.default_model is None
+    assert variant.models == ()
+    assert variant.requires_api_key is True
+    assert variant.requires_base_url is True
+
+
 def test_gemini_api_key_catalog_uses_current_flash_models() -> None:
     variant = resolve_provider_variant("gemini", "api_key")
     models = list_models_for_variant("gemini", "api_key")

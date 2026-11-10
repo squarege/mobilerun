@@ -64,6 +64,7 @@ SUPPORTED_PROVIDERS = [
     "GoogleGenAI",
     "Ollama",
     "Anthropic",
+    "AnthropicLike",
     "DeepSeek",
     "OpenRouter",
     "MiniMax",
@@ -76,6 +77,10 @@ PROVIDER_ALIASES = {
     "gemini": "GoogleGenAI",
     "google": "GoogleGenAI",
     "claude": "Anthropic",
+    "anthropic compatible": "Anthropic",
+    "anthropic-compatible": "Anthropic",
+    "anthropic-like": "Anthropic",
+    "anthropic_like": "Anthropic",
     "openai compatible": "OpenAILike",
     "openai-like": "OpenAILike",
     "openai like": "OpenAILike",
@@ -907,7 +912,7 @@ def load_llm(provider_name: str, model: str | None = None, **kwargs: Any) -> LLM
 
         llm_class = Ollama
         kwargs = _prepare_ollama_kwargs(kwargs, Ollama)
-    elif provider_name == "Anthropic":
+    elif provider_name in {"Anthropic", "AnthropicLike"}:
         kwargs.setdefault("model", ANTHROPIC_API_DEFAULT_MODEL)
         return _load_anthropic(**kwargs)
     elif provider_name == "OpenRouter":

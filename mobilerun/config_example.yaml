@@ -90,6 +90,16 @@ llm_profiles:
     # kwargs:
     #   max_tokens: 2048
     #   context_window: 32768
+    #
+    # Anthropic-compatible custom provider example. The endpoint should expose
+    # the Anthropic Messages API; the API key is read from ANTHROPIC_API_KEY or
+    # the saved credential store (never put the key in this file):
+    # provider: Anthropic
+    # provider_family: anthropic_like
+    # auth_mode: api_key
+    # model: your-model-name
+    # base_url: http://localhost:8000/anthropic
+    # api_key_source: auto
       
   # Executor: Selects and executes atomic actions
   executor:

@@ -37,6 +37,7 @@ VARIANT_ENV_KEY_SLOT: dict[str, str] = {
     "OpenAIResponses": "openai",
     "XAI": "xai",
     "Anthropic": "anthropic",
+    "AnthropicLike": "anthropic",
     "ZAI": "zai",
     "ZAI_Coding": "zai",
     "MiniMax": "minimax",
@@ -192,6 +193,24 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
                 models=ANTHROPIC_OAUTH_MODELS,
                 credential_path=str(ANTHROPIC_OAUTH_CREDENTIAL_PATH),
             ),
+        ),
+    ),
+    ProviderFamilySpec(
+        id="anthropic_like",
+        display_name="Anthropic Compatible",
+        variants=(
+            ProviderVariantSpec(
+                id="AnthropicLike",
+                runtime_provider_name="Anthropic",
+                auth_mode="api_key",
+                default_model=None,
+                models=(),
+                requires_api_key=True,
+                requires_base_url=True,
+            ),
+        ),
+        notes=(
+            "Use for providers that expose the Anthropic Messages API at a custom URL.",
         ),
     ),
     ProviderFamilySpec(

@@ -1115,7 +1115,7 @@ async def doctor(device: str | None, debug: bool | None):
     "--provider",
     type=str,
     default=None,
-    help="Provider family (gemini, openai, anthropic, XAI, ollama, openai_like, minimax, zai).",
+    help="Provider family (gemini, openai, anthropic, anthropic_like, XAI, ollama, openai_like, minimax, zai).",
 )
 @click.option(
     "--auth-mode",
