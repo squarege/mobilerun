@@ -169,6 +169,63 @@ def test_macro_tap_selector_refuses_ambiguous_target_and_taps_unique_target():
     assert driver.taps == [(60, 40)]
 
 
+def test_scoped_recovery_agent_backs_out_of_account_overlay_without_llm():
+    class BackDriver(FakeDriver):
+        def __init__(self):
+            super().__init__([_raw_state()])
+            self.buttons = []
+
+        async def press_button(self, button):
+            self.buttons.append(button)
+
+    driver = BackDriver()
+    player = MacroPlayer(delay_between_actions=0)
+    player.driver = driver
+    agent = ScopedRecoveryAgent(player)
+    state = {"nodes": [{"text": "在线开户", "class": "TextView"}, {"text": "已有交易账户？直接登录", "class": "TextView"}]}
+
+    outcome = asyncio.run(
+        agent(
+            current_state=state,
+            divergence={"reason": "OVERLAY_DETECTED"},
+            failed_step_index=0,
+            recovery_budget={"max_actions": 5, "max_seconds": 10},
+        )
+    )
+
+    assert outcome.status == "RECOVERED_TO_SAME_STEP"
+    assert outcome.llm_calls == 0
+    assert driver.buttons == ["back"]
+
+
+def test_scoped_recovery_agent_closes_a_known_overlay_without_llm():
+    driver = FakeDriver([_raw_state()])
+    player = MacroPlayer(delay_between_actions=0)
+    player.driver = driver
+    agent = ScopedRecoveryAgent(player)
+    state = {
+        "screen": {"width": 1080, "height": 2400},
+        "nodes": [
+            {"resource_id": "pop-layer-ad", "class": "View", "bounds": {"left": 100, "top": 500, "right": 900, "bottom": 1700}},
+            {"resource_id": "", "text": "pop页面属性", "class": "TextView", "bounds": {"left": 0, "top": 0, "right": 1080, "bottom": 2400}},
+            {"resource_id": "", "class": "View", "bounds": {"left": 500, "top": 1760, "right": 580, "bottom": 1840, "center_x": 540, "center_y": 1800}},
+        ],
+    }
+
+    outcome = asyncio.run(
+        agent(
+            current_state=state,
+            divergence={"reason": "OVERLAY_DETECTED"},
+            failed_step_index=0,
+            recovery_budget={"max_actions": 5, "max_seconds": 10},
+        )
+    )
+
+    assert outcome.status == "RECOVERED_TO_SAME_STEP"
+    assert outcome.llm_calls == 0
+    assert driver.taps == [(540, 1800)]
+
+
 def test_scoped_recovery_agent_only_taps_a_unique_selector():
     expected = normalize_ui_state(_raw_state())
     driver = FakeDriver([expected])

@@ -46,6 +46,16 @@ class ScopedRecoveryAgent:
         llm_calls = 0
         performed_actions = []
         current_state = context.get("current_state") or {}
+
+        local_fix = await self._close_known_overlay(current_state)
+        if local_fix:
+            return RecoveryOutcome.recovered_to_same_step(
+                reason="closed a uniquely identified safe overlay control",
+                agent_actions=1,
+                llm_calls=0,
+                actions=[{"action": "tap", "kind": "known_overlay_close"}],
+            )
+
         for _ in range(max_actions):
             prompt = self._prompt(context, current_state, actions, max_actions)
             try:
@@ -180,6 +190,67 @@ class ScopedRecoveryAgent:
         if not isinstance(payload, dict):
             raise ValueError("recovery response must be a JSON object")
         return payload
+
+    async def _close_known_overlay(self, state: Dict[str, Any]) -> bool:
+        """Close only a narrowly identified ad/web overlay control.
+
+        This is intentionally deterministic and conservative: a popup marker
+        must be present and exactly one small, unlabeled, centered bottom
+        control may exist. Ambiguous controls are never clicked.
+        """
+        nodes = state.get("nodes", [])
+        texts = [str(node.get("text") or "") for node in nodes]
+        account_overlay = any(
+            "在线开户" in text or "已有交易账户" in text or "直接登录" in text
+            for text in texts
+        )
+        if account_overlay:
+            return await self.player.replay_action(
+                {"action_type": "back"}, current_state=state
+            )
+
+        has_overlay = any(
+            "pop-layer" in str(node.get("resource_id") or "")
+            or node.get("text") == "pop页面属性"
+            for node in nodes
+        )
+        if not has_overlay:
+            return False
+        screen = state.get("screen") or {}
+        width = float(screen.get("width") or 1080)
+        height = float(screen.get("height") or 2400)
+        candidates = []
+        for node in nodes:
+            bounds = node.get("bounds") or {}
+            if node.get("text") or node.get("resource_id") or node.get("content_description"):
+                continue
+            if node.get("class") not in {"View", "android.view.View"}:
+                continue
+            try:
+                node_width = bounds["right"] - bounds["left"]
+                node_height = bounds["bottom"] - bounds["top"]
+                center_x = bounds["center_x"]
+                center_y = bounds["center_y"]
+            except (KeyError, TypeError):
+                continue
+            if (
+                45 <= node_width <= 160
+                and 45 <= node_height <= 160
+                and abs(center_x - width / 2) <= width * 0.12
+                and height * 0.65 <= center_y <= height * 0.85
+            ):
+                candidates.append(node)
+        if len(candidates) != 1:
+            return False
+        bounds = candidates[0]["bounds"]
+        return await self.player.replay_action(
+            {
+                "action_type": "tap",
+                "x": bounds["center_x"],
+                "y": bounds["center_y"],
+            },
+            current_state=state,
+        )
 
     @staticmethod
     def _redact_state(state: Dict[str, Any]) -> Dict[str, Any]:
