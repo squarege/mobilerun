@@ -91,11 +91,11 @@ llm_profiles:
     #   max_tokens: 2048
     #   context_window: 32768
     #
-    # Anthropic-compatible custom provider example. The endpoint should expose
-    # the Anthropic Messages API; the API key is read from ANTHROPIC_API_KEY or
-    # the saved credential store (never put the key in this file):
-    # provider: Anthropic
-    # provider_family: anthropic_like
+    # MiniMax/DeepSeek DSML-compatible custom provider example. The endpoint
+    # uses the configured custom transport; the API key is read from
+    # MINIMAX_API_KEY or the saved credential store (never put it in this file):
+    # provider: MiniMaxDSML
+    # provider_family: minimax_dsml
     # auth_mode: api_key
     # model: your-model-name
     # base_url: http://localhost:8000/anthropic

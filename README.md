@@ -127,14 +127,14 @@ mobilerun configure
 
 The wizard walks you through choosing a provider, auth method, and model. You can also use provider environment variables such as `GOOGLE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, or `MINIMAX_API_KEY`.
 
-For an Anthropic Messages API-compatible custom provider, choose `Anthropic Compatible` in the wizard, or configure it directly:
+For a MiniMax/DeepSeek DSML-compatible custom provider, choose `MiniMax / DeepSeek DSML` in the wizard, or configure it directly:
 
 ```bash
 export ANTHROPIC_API_KEY="your-api-key"
-mobilerun configure --provider anthropic_like --model your-model --base-url http://localhost:8000/anthropic
+mobilerun configure --provider minimax_dsml --model your-model --base-url http://localhost:8000/anthropic
 ```
 
-The custom provider accepts any model name and sends requests through the Anthropic transport to the supplied base URL.
+The custom provider accepts any model name, uses the supplied endpoint, and parses MiniMax/DeepSeek DSML tool calls.
 
 ### 4. Run your first command
 

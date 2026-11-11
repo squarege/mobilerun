@@ -49,6 +49,10 @@ class LLMProfile:
             result["base_url"] = self.base_url
         if self.api_base:
             result["api_base"] = self.api_base
+        # Preserve the protocol choice for custom DSML profiles. This is an
+        # internal loader hint, not an Anthropic SDK argument.
+        if self.provider_family in {"anthropic_like", "minimax_dsml"}:
+            result["tool_protocol"] = "dsml"
         if self.credential_path:
             result["credential_path"] = self.credential_path
         # Merge additional kwargs

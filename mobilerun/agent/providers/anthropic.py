@@ -10,6 +10,9 @@ from typing import Any
 
 ANTHROPIC_API_DEFAULT_MODEL = "claude-sonnet-5"
 ANTHROPIC_OAUTH_DEFAULT_MODEL = ANTHROPIC_API_DEFAULT_MODEL
+# Custom Anthropic-compatible gateways do not appear in llama-index's model
+# table. Keep a conservative fallback so metadata lookup does not reject them.
+ANTHROPIC_DEFAULT_CONTEXT_WINDOW = 200_000
 ANTHROPIC_FABLE_5_1_MODEL = "claude-fable-5-1"
 ANTHROPIC_OPUS_5_5_MODEL = "claude-opus-5-5"
 ANTHROPIC_SONNET_5_5_MODEL = "claude-sonnet-5-5"

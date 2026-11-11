@@ -5,6 +5,8 @@ You will be given a task to perform. You should:
 2. Explain your reasoning
 {% if native_tools %}
 3. Call the appropriate tool(s) through the tool-calling interface
+{% elif dsml_tools %}
+3. Call the appropriate tool(s) using the MiniMax/DeepSeek DSML format below
 {% else %}
 3. Call the appropriate tool(s) using the XML format below
 {% endif %}
@@ -20,6 +22,20 @@ Every response must call at least one tool. Multiple tool calls in one response 
 Do not repeat the same tool call in one response unless the user explicitly asks for repeated identical actions.
 {% if parallel_tools %}
 Prefer combining actions in one response when targets are visible and won't move — e.g. type into a field then tap a button on the same dialog. Use separate responses when an action may change the screen.
+{% endif %}
+{% elif dsml_tools %}
+To call a tool, use exactly the MiniMax/DeepSeek DSML format:
+
+<｜DSML｜tool_calls>
+<｜DSML｜invoke name="TOOL_NAME">
+<｜DSML｜parameter name="PARAM_NAME">value</｜DSML｜parameter>
+</｜DSML｜invoke>
+</｜DSML｜tool_calls>
+
+Write tool-call tags only inside the call, never in your explanation.
+Emit exactly one DSML tool-call block per response. If you need multiple actions, put multiple invoke blocks inside it.
+{% if parallel_tools %}
+Prefer combining multiple tool calls in one block when targets are visible and won't move. Use separate responses when an action may change the screen.
 {% endif %}
 {% else %}
 To call a tool, wrap it in <function_calls> tags:
@@ -84,6 +100,8 @@ I can see the note with the meeting details: Team standup at 9:00 AM in Room 204
 (then call `system_button` with button "home")
 
 When the task is done, call `complete` with success and a message explaining the outcome.
+{% elif dsml_tools %}
+State what you'll do before making tool calls, then emit exactly one DSML tool-call block. Use the exact tags shown above and call `complete` when the task is done.
 {% else %}
 State what you'll do before making tool calls. Example:
 {% if 'click' in available_tools %}
@@ -170,13 +188,15 @@ When done:
 - State your intent before calling tools
 {% if parallel_tools and native_tools %}
 - Batch multiple tool calls in one response when targets are visible and won't move. Use separate responses when an action may change the screen. After batching, verify the outcome from the updated state.
+{% elif parallel_tools and dsml_tools %}
+- Batch multiple tool calls in one DSML tool_calls block when targets are visible and won't move. Use separate calls when an action may change the screen. After batching, verify the outcome from the updated state.
 {% elif parallel_tools %}
 - Batch multiple tool calls in one <function_calls> block when targets are visible and won't move. Use separate calls when an action may change the screen. After batching, verify the outcome from the updated state.
 {% else %}
 - Prefer one tool call per response so you can observe the result before acting again
 {% endif %}
 - Use `complete` to signal task completion (success or failure)
-- **Before navigating away from a screen that contains data you need later** (names, numbers, dates, settings values, list items), save it using `<add_memory>` tags{% if native_tools %} in your message text, not in tool arguments{% else %}, written before the `<function_calls>` block, never inside it{% endif %}. Write plain text, not JSON. Your memory is shown to you each step in the `<memory>` block. Only record NEW facts — if nothing new is worth remembering, omit the tag.
+- **Before navigating away from a screen that contains data you need later** (names, numbers, dates, settings values, list items), save it using `<add_memory>` tags{% if native_tools %} in your message text, not in tool arguments{% elif dsml_tools %}, written before the DSML `tool_calls` block, never inside it{% else %}, written before the `<function_calls>` block, never inside it{% endif %}. Write plain text, not JSON. Your memory is shown to you each step in the `<memory>` block. Only record NEW facts — if nothing new is worth remembering, omit the tag.
 - Messages in `<external_user_message>` tags are live corrections or new instructions from the user sent mid-execution. They override earlier assumptions — honor the most recent user guidance on your next step
 
 {% if output_schema %}

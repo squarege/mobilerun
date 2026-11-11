@@ -38,6 +38,7 @@ VARIANT_ENV_KEY_SLOT: dict[str, str] = {
     "XAI": "xai",
     "Anthropic": "anthropic",
     "AnthropicLike": "anthropic",
+    "MiniMaxDSML": "minimax",
     "ZAI": "zai",
     "ZAI_Coding": "zai",
     "MiniMax": "minimax",
@@ -211,6 +212,24 @@ PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (
         ),
         notes=(
             "Use for providers that expose the Anthropic Messages API at a custom URL.",
+        ),
+    ),
+    ProviderFamilySpec(
+        id="minimax_dsml",
+        display_name="MiniMax / DeepSeek DSML",
+        variants=(
+            ProviderVariantSpec(
+                id="MiniMaxDSML",
+                runtime_provider_name="MiniMaxDSML",
+                auth_mode="api_key",
+                default_model=None,
+                models=(),
+                requires_api_key=True,
+                requires_base_url=True,
+            ),
+        ),
+        notes=(
+            "Use for MiniMax/DeepSeek-style DSML tool calls at a custom endpoint.",
         ),
     ),
     ProviderFamilySpec(

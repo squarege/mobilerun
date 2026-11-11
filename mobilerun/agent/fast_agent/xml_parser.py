@@ -27,6 +27,14 @@ _PARAM_OPEN_RE = re.compile(r"<parameter(?=[\s>/])")
 
 _DSML_MARKUP_PATTERN = r"(?:<|＜)\s*[/／]?\s*｜+DSML｜+"
 _DSML_MARKUP_RE = re.compile(_DSML_MARKUP_PATTERN, re.IGNORECASE)
+_DSML_PREFIX_RE = re.compile(r"(?:<|＜)\s*([/／]?)\s*｜+DSML｜+\s*")
+_DSML_BROKEN_INVOKE_CLOSE_RE = re.compile(r"</\s*｜DSML\s*>", re.IGNORECASE)
+_BROKEN_INVOKE_CLOSE_RE = re.compile(r"</\s*invok\s*>", re.IGNORECASE)
+_WRONG_WRAPPER_CLOSE_RE = re.compile(
+    r"</\s*(?:function_results|tool_results|function_call|tool_call)\s*>\s*$",
+    re.IGNORECASE,
+)
+_TOOL_CALLS_TAG_RE = re.compile(r"</?tool_calls?>", re.IGNORECASE)
 _TOOL_CALL_MARKUP_RE = re.compile(
     r"(?:<|＜)\s*[/／]?\s*(?:function_calls?|tool_calls?|invoke|parameter)\b"
     r"|" + _DSML_MARKUP_PATTERN,
@@ -108,7 +116,10 @@ def parse_tool_calls(
 
 
 def parse_tool_calls_detailed(
-    text: str, param_types: Optional[Dict[str, str]] = None
+    text: str,
+    param_types: Optional[Dict[str, str]] = None,
+    *,
+    allow_dsml: bool = False,
 ) -> ToolCallParseResult:
     """Parse tool calls and classify whether markup was absent, valid, or malformed.
 
@@ -117,6 +128,15 @@ def parse_tool_calls_detailed(
     before that opener), the result is malformed even when a later block is
     valid.
     """
+    if allow_dsml:
+        normalized = _normalize_dsml_markup(text)
+        if normalized != text:
+            return parse_tool_calls_detailed(
+                normalized,
+                param_types,
+                allow_dsml=False,
+            )
+
     if OPEN_TAG not in text:
         markup_match = _TOOL_CALL_MARKUP_RE.search(text)
         if markup_match:
@@ -178,6 +198,45 @@ def parse_tool_calls_detailed(
         end=end,
         ignored_blocks=_count_tool_call_blocks(text, end),
     )
+
+
+def _normalize_dsml_markup(text: str) -> str:
+    """Convert MiniMax/DeepSeek DSML tags to Mobilerun's XML dialect.
+
+    Some MiniMax/DeepSeek-style models return text tool calls using native DSML
+    markers. This conversion is opt-in because arbitrary DSML in ordinary model
+    responses remains malformed under the default parser.
+    """
+    repaired = _DSML_BROKEN_INVOKE_CLOSE_RE.sub(
+        "</｜DSML｜invoke>", text
+    )
+    repaired = _BROKEN_INVOKE_CLOSE_RE.sub("</invoke>", repaired)
+    normalized = _DSML_PREFIX_RE.sub(
+        lambda match: "</" if match.group(1) else "<",
+        repaired,
+    )
+    normalized = _TOOL_CALLS_TAG_RE.sub(
+        lambda match: (
+            "</function_calls>"
+            if match.group(0).startswith("</")
+            else "<function_calls>"
+        ),
+        normalized,
+    )
+
+    # DSML models sometimes omit the outer close or copy a
+    # ``function_results`` close tag from the previous turn. If the invoke
+    # itself is complete, recover the single tool-call block safely.
+    if OPEN_TAG in normalized and CLOSE_TAG not in normalized:
+        last_invoke_close = normalized.rfind("</invoke>")
+        if last_invoke_close >= normalized.find(OPEN_TAG):
+            tail_start = last_invoke_close + len("</invoke>")
+            tail = normalized[tail_start:]
+            cleaned_tail = _WRONG_WRAPPER_CLOSE_RE.sub("", tail)
+            if not cleaned_tail.strip():
+                normalized = normalized[:tail_start] + CLOSE_TAG
+
+    return normalized
 
 
 def _count_tool_call_blocks(text: str, end: int) -> int:

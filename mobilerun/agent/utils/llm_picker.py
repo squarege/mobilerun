@@ -14,6 +14,7 @@ from llama_index.core.types import PydanticProgramMode
 
 from mobilerun.agent.providers.anthropic import (
     ANTHROPIC_API_DEFAULT_MODEL,
+    ANTHROPIC_DEFAULT_CONTEXT_WINDOW,
     ANTHROPIC_MODELS_WITHOUT_FORCED_TOOL_CHOICE,
     ANTHROPIC_UNSUPPORTED_SAMPLING_PARAMS,
     StreamUsage,
@@ -65,6 +66,7 @@ SUPPORTED_PROVIDERS = [
     "Ollama",
     "Anthropic",
     "AnthropicLike",
+    "MiniMaxDSML",
     "DeepSeek",
     "OpenRouter",
     "MiniMax",
@@ -81,6 +83,9 @@ PROVIDER_ALIASES = {
     "anthropic-compatible": "Anthropic",
     "anthropic-like": "Anthropic",
     "anthropic_like": "Anthropic",
+    "minimax dsml": "MiniMaxDSML",
+    "minimax/deepseek dsml": "MiniMaxDSML",
+    "minimax deepseek": "MiniMaxDSML",
     "openai compatible": "OpenAILike",
     "openai-like": "OpenAILike",
     "openai like": "OpenAILike",
@@ -629,10 +634,14 @@ def _load_google_genai(**kwargs: Any) -> LLM:
     return MobilerunGoogleGenAI(**filtered_kwargs)
 
 
-def _load_anthropic(**kwargs: Any) -> LLM:
+def _load_anthropic(*, dsml: bool = False, **kwargs: Any) -> LLM:
     from llama_index.llms.anthropic import Anthropic
 
     class MobilerunAnthropic(Anthropic):
+        # MiniMax/DeepSeek-compatible gateways may emit DSML text tool calls.
+        supports_dsml_tool_calls: ClassVar[bool] = dsml
+        tool_protocol: ClassVar[str] = "dsml" if dsml else "xml"
+
         def __init__(self, **kwargs: Any) -> None:
             super().__init__(**kwargs)
             record_stream_usage(self._client.messages)
@@ -709,9 +718,14 @@ def _load_anthropic(**kwargs: Any) -> LLM:
 
         @property
         def metadata(self) -> LLMMetadata:
-            context_window = anthropic_model_context_window(self.model)
-            if context_window is None:
-                return super().metadata
+            # LlamaIndex validates unknown model ids against its built-in
+            # Anthropic catalog. Custom-compatible gateways intentionally use
+            # arbitrary ids, so use a conservative fallback instead of
+            # delegating to the validating superclass implementation.
+            context_window = (
+                anthropic_model_context_window(self.model)
+                or ANTHROPIC_DEFAULT_CONTEXT_WINDOW
+            )
             return LLMMetadata(
                 context_window=context_window,
                 num_output=self.max_tokens,
@@ -770,6 +784,7 @@ def load_llm(provider_name: str, model: str | None = None, **kwargs: Any) -> LLM
         raise ValueError("provider_name cannot be empty.")
 
     provider_name = normalize_provider_name(provider_name)
+    tool_protocol = kwargs.pop("tool_protocol", None)
 
     if model is not None:
         if provider_name == "OpenAIResponses":
@@ -811,6 +826,23 @@ def load_llm(provider_name: str, model: str | None = None, **kwargs: Any) -> LLM
         from mobilerun.agent.utils.oauth.grok_oauth_llm import GrokOAuth
 
         return GrokOAuth(**{k: v for k, v in kwargs.items() if v is not None})
+
+    # MiniMax/DeepSeek DSML is a direct text-tool protocol mode. Its custom
+    # endpoint still uses the Anthropic Messages wire format, but it is not
+    # exposed as an Anthropic provider or subject to Anthropic model catalogs.
+    if provider_name == "MiniMaxDSML":
+        import os
+
+        api_key = kwargs.get("api_key")
+        if not isinstance(api_key, str) or not api_key.strip():
+            api_key = os.environ.get("MINIMAX_API_KEY")
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise ValueError(
+                "MiniMaxDSML requires an API key. Pass api_key explicitly or set "
+                "MINIMAX_API_KEY."
+            )
+        kwargs["api_key"] = api_key
+        return _load_anthropic(dsml=True, **kwargs)
 
     # Legacy aliases: MiniMax and DeepSeek route through OpenAILike.
     if provider_name == "MiniMax":
@@ -914,7 +946,7 @@ def load_llm(provider_name: str, model: str | None = None, **kwargs: Any) -> LLM
         kwargs = _prepare_ollama_kwargs(kwargs, Ollama)
     elif provider_name in {"Anthropic", "AnthropicLike"}:
         kwargs.setdefault("model", ANTHROPIC_API_DEFAULT_MODEL)
-        return _load_anthropic(**kwargs)
+        return _load_anthropic(dsml=tool_protocol == "dsml", **kwargs)
     elif provider_name == "OpenRouter":
         from llama_index.llms.openrouter import OpenRouter
 

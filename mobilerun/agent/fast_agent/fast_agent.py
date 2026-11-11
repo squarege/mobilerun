@@ -209,6 +209,9 @@ class FastAgent(Workflow):
             "output_schema": self._output_schema,
             "parallel_tools": self.config.parallel_tools,
             "native_tools": self.native_tools,
+            "dsml_tools": bool(
+                getattr(self.llm, "supports_dsml_tool_calls", False)
+            ),
             "vision": self.vision,
             "platform": self.shared_state.platform,
             "screenshot_only": bool(
@@ -461,7 +464,11 @@ class FastAgent(Workflow):
         if self.native_tools:
             parse_result = parse_native_tool_calls(response.message, self.param_types)
         else:
-            parse_result = parse_tool_calls_detailed(response_text, self.param_types)
+            parse_result = parse_tool_calls_detailed(
+                response_text,
+                self.param_types,
+                allow_dsml=bool(getattr(self.llm, "supports_dsml_tool_calls", False)),
+            )
         thought = parse_result.thought
         tool_calls = parse_result.calls
 
