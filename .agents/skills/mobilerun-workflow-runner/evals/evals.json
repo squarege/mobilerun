@@ -1,0 +1,38 @@
+{
+  "skill_name": "mobilerun-workflow-runner",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "直接调用这个 Mobilerun workflow skill，先列出当前可用工作流，让我选择后在一台已连接的测试设备上无 AI 修正运行一次，并输出结果总结。",
+      "expected_output": "先列出 workflow，再确认/使用用户选择、明确设备和 stop 模式，执行一次并输出结构化摘要。",
+      "files": [],
+      "expectations": [
+        "The available workflows are listed before execution",
+        "The run uses --on-divergence stop and an explicit device",
+        "The result includes status, steps, LLM calls, and failure reason"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "运行用户选择的移动端 workflow，允许 AI 修正，连续跑 10 次；不要遇到一次失败就重试同一次，最后给我严格成功率和恢复后有效成功率。",
+      "expected_output": "执行 10 个独立尝试，使用 recover，保留每次结果，并分别统计严格成功率与恢复后有效成功率。",
+      "files": [],
+      "expectations": [
+        "Exactly 10 requested attempts are represented or an explicit completed/requested shortfall is reported",
+        "The command uses --on-divergence recover",
+        "The report separates MACRO_SUCCESS from RECOVERED_AND_RESUMED"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "把当前选中的 workflow 在不允许 AI 介入的情况下跑 3 遍，失败后继续后面的批次，输出每一遍的 run id、状态和最终通过率。",
+      "expected_output": "使用 stop 模式执行 3 次，不把失败重试成成功，报告每次 run id、状态和 3 次分母的通过率。",
+      "files": [],
+      "expectations": [
+        "The command uses --on-divergence stop",
+        "The report contains three per-run records or an explicit shortfall",
+        "The pass-rate denominator is three"
+      ]
+    }
+  ]
+}

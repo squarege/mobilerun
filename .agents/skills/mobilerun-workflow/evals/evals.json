@@ -1,0 +1,38 @@
+{
+  "skill_name": "mobilerun-workflow",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我想把最近在一台已连接的 Android 测试设备上跑通的‘打开设置并切换深色模式’录制成可复用的 Mobilerun 工作流，校验后发布。请给出完整命令和检查点。",
+      "expected_output": "使用项目本地 uv run，先录制轨迹，再 macro replay，导入 draft，inspect/validate，最后 activate；明确要求用户提供设备串号并说明安全检查。",
+      "files": [],
+      "expectations": [
+        "The instructions use an explicit user-provided device serial",
+        "The workflow is replayed and validated before activation",
+        "The response identifies entry and completion checks"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "请修改 workflows/order-search 当前工作流：把搜索词改成运行时参数 query，并让完成条件必须看到‘搜索结果’这个唯一 UI 文本。不要直接改 active 版本。",
+      "expected_output": "创建或导入新版本，使用 {{query}} 字面替换，更新 completion_check，validate 新版本并说明 activate 前需要审核。",
+      "files": [],
+      "expectations": [
+        "The active version is not edited in place",
+        "The query is represented as a runtime parameter",
+        "The new completion check is validated before activation"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "我有多台 ADB 设备，想同时运行同一个 Mobilerun workflow，并分别追踪每台设备的结果。",
+      "expected_output": "说明单个 Mobilerun run 不支持设备池，提供每台设备一个独立进程、显式设备串号、限并发、独立日志/退出码的安全方案，并提示 LLM 限流和副作用风险。",
+      "files": [],
+      "expectations": [
+        "Each process receives an explicit device serial",
+        "The plan uses bounded concurrency and separate logs",
+        "The response distinguishes process fan-out from a durable scheduler"
+      ]
+    }
+  ]
+}

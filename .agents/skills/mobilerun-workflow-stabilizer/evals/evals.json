@@ -1,0 +1,38 @@
+{
+  "skill_name": "mobilerun-workflow-stabilizer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "在当前 Mobilerun 仓库中，用一台已连接的 Android 测试设备探索一个包含登录、页面导航、表单输入和结果校验的移动端流程。请让 AI 尝试几次，吸收失败，固化成稳定 workflow，最后运行 10 次并给出成功率和报告。",
+      "expected_output": "完成有边界的 AI 探索，导入并激活一个版本化 workflow，执行 10 次批量回放，分别报告严格脚本成功率和恢复后的有效成功率，并记录失败与修复。",
+      "files": [],
+      "expectations": [
+        "The workflow is imported, validated, and activated as a versioned artifact",
+        "The final batch executes the requested number of runs",
+        "The report distinguishes strict and supervised pass rates"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "这个 Mobilerun workflow 已经有一个版本，但最近经常遇到广告弹窗和启动页状态不一致。请先跑几次定位问题，创建新版本修复，验证后再跑 10 次；不要覆盖旧版本。",
+      "expected_output": "保留旧版本，记录失败分类，创建并验证新版本，运行 10 次并报告版本、恢复次数、LLM 调用和通过率。",
+      "files": [],
+      "expectations": [
+        "The old active version remains preserved",
+        "A new version records the failure fix",
+        "The batch report includes recovery attempts and failures"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "请把一个需要登录、填写测试数据并验证最终结果的 Mobilerun 手机任务做成可交给测试同事使用的固定流程。先用自然语言探索，不要把第一次成功直接当成稳定；固化后做 10 次回放，输出可审计的 Markdown 报告。",
+      "expected_output": "输出可发布的版本化 workflow、明确完成条件、批量运行证据和包含风险/失败记录的 Markdown 报告。",
+      "files": [],
+      "expectations": [
+        "The output includes a reusable workflow id and active version",
+        "The workflow has a code-side completion check",
+        "The report includes auditable run evidence and remaining risks"
+      ]
+    }
+  ]
+}
