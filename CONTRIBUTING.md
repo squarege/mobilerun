@@ -1,5 +1,21 @@
 # Contributing to Mobilerun
 
+## Commit privacy gate
+
+This repository checks staged content before every commit. Enable the versioned hook once per checkout:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Run the same check manually with:
+
+```bash
+python3 scripts/check_staged_privacy.py
+```
+
+The gate blocks concrete workflow/runtime artifacts, private workflow identifiers, credentials, private keys, device-specific serials, and local absolute paths. Example and fixture paths are allowed. Keep real run records, screenshots, credentials, and workflow details outside the repository.
+
 Thank you for your interest in contributing to Mobilerun! This document provides guidelines and instructions for contributing to the project.
 
 ## Getting Started

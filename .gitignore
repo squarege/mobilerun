@@ -39,6 +39,8 @@ credentials.yaml
 !.agents/
 !.agents/skills/
 !.agents/skills/**
+!.githooks/
+!.githooks/**
 
 backend/
 frontend/
