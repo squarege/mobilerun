@@ -262,6 +262,78 @@ def test_scoped_recovery_agent_only_taps_a_unique_selector():
     assert driver.taps == [(60, 40)]
 
 
+def test_scoped_recovery_agent_journals_raw_llm_output(tmp_path):
+    expected = normalize_ui_state(_raw_state())
+    driver = FakeDriver([expected])
+    player = MacroPlayer(
+        delay_between_actions=0,
+        journal_path=str(tmp_path / "journal.jsonl"),
+    )
+    player.driver = driver
+    agent = ScopedRecoveryAgent(player)
+
+    class FakeLLM:
+        async def achat(self, messages):
+            return SimpleNamespace(
+                message=SimpleNamespace(
+                    content=(
+                        "The popup blocks the flow; closing it is safe.\n"
+                        '```json\n{"action":"done"}\n```'
+                    )
+                )
+            )
+
+    agent.llm = FakeLLM()
+    outcome = asyncio.run(
+        agent(
+            current_state=expected,
+            divergence={"reason": "OVERLAY_DETECTED"},
+            failed_step_index=3,
+            recovery_budget={"max_actions": 2, "max_seconds": 1},
+        )
+    )
+
+    assert outcome.status == "RECOVERED_TO_SAME_STEP"
+    assert outcome.llm_calls == 1
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "journal.jsonl").read_text().splitlines()
+    ]
+    llm_records = [r for r in records if r["event"] == "recovery_llm"]
+    assert len(llm_records) == 1
+    assert llm_records[0]["call"] == 1
+    assert llm_records[0]["failed_step_index"] == 3
+    assert "closing it is safe" in llm_records[0]["content"]
+    assert '{"action":"done"}' in llm_records[0]["content"]
+    assert any(record["event"] == "recovery_start" for record in records)
+    prompts = [r for r in records if r["event"] == "recovery_prompt"]
+    assert len(prompts) == 1
+    assert '"failed_step_index": 3' in prompts[0]["prompt"]
+
+
+def test_recovery_prompt_contains_workflow_evidence():
+    prompt = ScopedRecoveryAgent._prompt(
+        {
+            "failed_step_index": 2,
+            "last_verified_checkpoint": 1,
+            "failed_step_action": {
+                "action_type": "tap",
+                "pre_state": {"nodes": [{"text": "Trade"}]},
+            },
+            "remaining_actions": [{"action_type": "wait", "duration": 1}],
+            "divergence": {"reason": "state mismatch"},
+        },
+        {"nodes": [{"text": "Popup"}]},
+        actions=1,
+        limit=5,
+    )
+
+    assert "expected_pre_state" in prompt
+    assert "remaining_actions" in prompt
+    assert "last_verified_checkpoint" in prompt
+    assert "Popup" in prompt
+
+
 def test_high_risk_action_failure_is_unknown_outcome_and_not_retried():
     expected = normalize_ui_state(_raw_state())
     driver = FakeDriver([expected], fail_taps=True)

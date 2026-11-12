@@ -6,9 +6,11 @@ that were generated during MobileAgent trajectory recording.
 """
 
 import asyncio
+import json
 import logging
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from mobilerun_core_local.driver.android import AndroidDriver
@@ -56,6 +58,7 @@ class MacroPlayer:
         model: Optional[str] = None,
         config_path: Optional[str] = None,
         journal_path: Optional[str] = None,
+        artifacts_dir: Optional[str] = None,
         max_recoveries: int = 1,
         max_recovery_actions: int = 5,
         max_recovery_seconds: float = 45.0,
@@ -84,6 +87,10 @@ class MacroPlayer:
         self.max_recovery_actions = max(0, max_recovery_actions)
         self.max_recovery_seconds = max(0.0, max_recovery_seconds)
         self.journal = RunJournal(journal_path)
+        self.artifacts_dir = Path(artifacts_dir) if artifacts_dir else None
+        if self.artifacts_dir:
+            (self.artifacts_dir / "states").mkdir(parents=True, exist_ok=True)
+            (self.artifacts_dir / "screenshots").mkdir(parents=True, exist_ok=True)
         self.last_divergence: Optional[Dict[str, Any]] = None
         self.state_provider = None
         self._auto_state_provider = False
@@ -96,7 +103,34 @@ class MacroPlayer:
         if self.driver is None:
             self.driver = AndroidDriver(serial=self.device_serial)
             await self.driver.connect()
-            logger.info(f"🤖 Initialized driver for device: {self.device_serial}")
+            if getattr(self.driver, "portal", None) is None:
+                # The Portal HTTP server may not be listening yet (e.g. the
+                # accessibility service was just (re)enabled or the app was
+                # killed). Launch the app, give it a moment, then reconnect;
+                # without Portal, state falls back to flaky uiautomator dumps.
+                try:
+                    device = getattr(self.driver, "device", None)
+                    if device is not None:
+                        await device.shell("monkey -p com.mobilerun.portal 1")
+                        await asyncio.sleep(5.0)
+                except Exception:
+                    logger.debug("Portal app launch attempt failed", exc_info=True)
+                retry_driver = AndroidDriver(serial=self.device_serial)
+                try:
+                    await retry_driver.connect()
+                    if getattr(retry_driver, "portal", None) is not None:
+                        self.driver = retry_driver
+                except Exception:
+                    logger.debug("Portal retry connect failed", exc_info=True)
+            if self.driver.portal is not None:
+                logger.info(
+                    f"🤖 Initialized driver for device: {self.device_serial} (Portal)"
+                )
+            else:
+                logger.warning(
+                    f"🤖 Initialized driver for device: {self.device_serial} "
+                    "(ADB-only; Portal unavailable)"
+                )
         return self.driver
 
     def load_macro_from_file(self, macro_file_path: str) -> Dict[str, Any]:
@@ -182,6 +216,9 @@ class MacroPlayer:
         if device is None:
             raise RuntimeError("Android driver does not expose an ADB device")
         path = "/sdcard/mobilerun_macro_window.xml"
+        # A failed dump leaves the previous dump in place; reading it would
+        # return a stale screen state (e.g. the launcher from an earlier run).
+        await device.shell(f"rm -f {path}")
         await device.shell(f"uiautomator dump {path}")
         raw_xml = await device.shell(f"cat {path}")
         start = raw_xml.find("<?xml")
@@ -226,7 +263,22 @@ class MacroPlayer:
         last_result = None
 
         while True:
-            current_state = await self.get_current_state_snapshot()
+            try:
+                current_state = await self.get_current_state_snapshot()
+            except Exception as exc:
+                # Transient state-observation failures (busy UI, failed dump)
+                # must keep polling until the deadline instead of crashing.
+                logger.warning(
+                    "State snapshot failed before step %s, retrying: %s",
+                    step_number,
+                    exc,
+                )
+                current_state = None
+                last_result = None
+                if time.monotonic() >= deadline:
+                    return False, None, None
+                await asyncio.sleep(self.state_poll_interval)
+                continue
             result = compare_states(pre_state, current_state, self.state_threshold)
             if result.matches:
                 return True, current_state, result
@@ -240,6 +292,57 @@ class MacroPlayer:
                 return False, last_state, last_result
 
             await asyncio.sleep(self.state_poll_interval)
+
+    @staticmethod
+    def _journal_action(action: Dict[str, Any]) -> Dict[str, Any]:
+        """Return a useful action summary without persisting secret values."""
+        summary = {}
+        for key, value in action.items():
+            if key in {"text", "value", "secret", "secret_value"} and action.get(
+                "action_type", action.get("type")
+            ) == "type_secret":
+                summary[key] = "<REDACTED>"
+            else:
+                summary[key] = value
+        return summary
+
+    def _write_snapshot(self, step_index: int, phase: str, state: Dict[str, Any]) -> Optional[str]:
+        if self.artifacts_dir is None:
+            return None
+        path = self.artifacts_dir / "states" / f"step-{step_index + 1:04d}-{phase}.json"
+        try:
+            path.write_text(
+                json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError as exc:
+            logger.debug("Could not write %s state snapshot: %s", phase, exc)
+            return None
+        return str(path.relative_to(self.artifacts_dir.parent))
+
+    async def _capture_artifacts(
+        self, step_index: int, phase: str, state: Optional[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """Persist a state and screenshot without making artifact failure fatal."""
+        artifacts: Dict[str, str] = {}
+        if state is not None:
+            snapshot_path = self._write_snapshot(step_index, phase, state)
+            if snapshot_path:
+                artifacts["state_path"] = snapshot_path
+        if self.artifacts_dir is None:
+            return artifacts
+        try:
+            driver = await self._initialize_driver()
+            screenshot = await driver.screenshot()
+            screenshot_path = (
+                self.artifacts_dir / "screenshots" / f"step-{step_index + 1:04d}-{phase}.png"
+            )
+            screenshot_path.write_bytes(screenshot)
+            artifacts["screenshot_path"] = str(
+                screenshot_path.relative_to(self.artifacts_dir.parent)
+            )
+        except Exception as exc:
+            logger.debug("Could not capture %s artifact for step %s: %s", phase, step_index + 1, exc)
+        return artifacts
 
     async def replay_action(
         self, action: Dict[str, Any], current_state: Optional[Dict[str, Any]] = None
@@ -343,6 +446,137 @@ class MacroPlayer:
                 logger.info(f"⌨️  Inputting text: '{text}'")
                 result = await driver.input_text(text, clear)
                 return result is not False
+
+            elif action_type == "input_node_text":
+                # Deterministic copy of another visible node's text into the
+                # focused/typed field (e.g. mirror the displayed limit-down
+                # price into the price box). No model involvement. The source
+                # node may load asynchronously (market data), so poll briefly.
+                source_selector = action.get("source_selector") or {}
+                deadline = time.monotonic() + float(action.get("source_wait_seconds", 10.0))
+                matches = []
+                while True:
+                    state = current_state or await self.get_current_state_snapshot()
+                    matches = [
+                        node
+                        for node in state.get("nodes", [])
+                        if all(node.get(key) == value for key, value in source_selector.items())
+                    ]
+                    if matches or time.monotonic() >= deadline:
+                        break
+                    current_state = None
+                    await asyncio.sleep(0.5)
+                if len(matches) != 1:
+                    logger.error(
+                        "❌ input_node_text source selector matched %s nodes: %s",
+                        len(matches),
+                        source_selector,
+                    )
+                    return False
+                text = str(matches[0].get("text") or "").strip()
+                if not text:
+                    logger.error("❌ input_node_text source node has empty text")
+                    return False
+                tap_x = action.get("target_x")
+                tap_y = action.get("target_y")
+                if tap_x is not None and tap_y is not None:
+                    if await driver.tap(int(tap_x), int(tap_y)) is False:
+                        return False
+                    await asyncio.sleep(action.get("settle_seconds", 0.5))
+                clear = action.get("clear", True)
+                logger.info("⌨️  Inputting node text: '%s'", text)
+                result = await driver.input_text(text, clear)
+                if result is False:
+                    return False
+                # Self-check: re-read the field at the target point; retry the
+                # input once if the text did not land (e.g. focus race).
+                await asyncio.sleep(float(action.get("settle_seconds", 0.8)))
+                if tap_x is not None and tap_y is not None:
+                    check_state = await self.get_current_state_snapshot()
+                    for node in check_state.get("nodes", []):
+                        bounds = node.get("bounds") or {}
+                        try:
+                            inside = (
+                                bounds["left"] <= int(tap_x) <= bounds["right"]
+                                and bounds["top"] <= int(tap_y) <= bounds["bottom"]
+                            )
+                        except (KeyError, TypeError, ValueError):
+                            continue
+                        if inside and str(node.get("text") or "").strip() == text:
+                            return True
+                    logger.warning(
+                        "input_node_text: text did not land on first try; retrying"
+                    )
+                    if await driver.tap(int(tap_x), int(tap_y)) is False:
+                        return False
+                    await asyncio.sleep(action.get("settle_seconds", 0.8))
+                    result = await driver.input_text(text, clear)
+                    return result is not False
+                return True
+
+            elif action_type == "verify_nodes_text_equal":
+                # Exact code-side equality check between two visible nodes.
+                # Unlike similarity-based post_state matching, this is binary:
+                # texts must match character for character.
+                source_selector = action.get("source_selector") or {}
+                point = action.get("point") or {}
+                state = current_state or await self.get_current_state_snapshot()
+                nodes = state.get("nodes", [])
+                source_matches = [
+                    node
+                    for node in nodes
+                    if all(node.get(key) == value for key, value in source_selector.items())
+                ]
+                if len(source_matches) != 1:
+                    logger.error(
+                        "❌ verify source selector matched %s nodes: %s",
+                        len(source_matches),
+                        source_selector,
+                    )
+                    return False
+                source_text = str(source_matches[0].get("text") or "").strip()
+
+                target_x = point.get("x")
+                target_y = point.get("y")
+                target_node = None
+                target_area = None
+                for node in nodes:
+                    bounds = node.get("bounds") or {}
+                    try:
+                        inside = (
+                            bounds["left"] <= int(target_x) <= bounds["right"]
+                            and bounds["top"] <= int(target_y) <= bounds["bottom"]
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if not inside:
+                        continue
+                    text_value = str(node.get("text") or "").strip()
+                    if not text_value:
+                        continue
+                    area = (bounds["right"] - bounds["left"]) * (
+                        bounds["bottom"] - bounds["top"]
+                    )
+                    # The point usually lies inside nested containers; the
+                    # smallest visible node containing it is the real target.
+                    if target_node is None or area < target_area:
+                        target_node = node
+                        target_area = area
+                if target_node is None:
+                    logger.error(
+                        "❌ verify point (%s, %s) hit no node with text", target_x, target_y
+                    )
+                    return False
+                target_text = str(target_node.get("text") or "").strip()
+                if source_text != target_text:
+                    logger.error(
+                        "❌ verify_nodes_text_equal mismatch: %r != %r",
+                        source_text,
+                        target_text,
+                    )
+                    return False
+                logger.info("✅ verify_nodes_text_equal: %r", source_text)
+                return True
 
             elif action_type == "type_secret":
                 secret_id = action.get("secret_id")
@@ -453,6 +687,7 @@ class MacroPlayer:
                 step=step_number,
                 status="PENDING",
                 action_type=action_type,
+                action=self._journal_action(action),
             )
 
             while True:
@@ -470,6 +705,16 @@ class MacroPlayer:
                         action.get("pre_state"), step_number
                     )
                 if state_matched:
+                    artifacts = await self._capture_artifacts(step_index, "pre", current_state)
+                    self.journal.append(
+                        "observation",
+                        index=step_index,
+                        step=step_number,
+                        phase="pre",
+                        match_score=match_result.score if match_result else None,
+                        match_reason=match_result.reason if match_result else None,
+                        **artifacts,
+                    )
                     break
 
                 self.last_divergence = {
@@ -483,7 +728,12 @@ class MacroPlayer:
                     "last_verified_checkpoint": result.last_verified_checkpoint,
                     "remaining_actions": all_actions[step_index:],
                 }
-                self.journal.append("divergence", **self.last_divergence)
+                divergence_artifacts = await self._capture_artifacts(
+                    step_index, "divergence", current_state
+                )
+                self.journal.append(
+                    "divergence", **self.last_divergence, **divergence_artifacts
+                )
 
                 if self.on_mismatch == "agent":
                     logger.warning("🤖 Handing off to agent after macro divergence")
@@ -576,6 +826,7 @@ class MacroPlayer:
                 step=step_number,
                 status="STARTED",
                 action_type=action_type,
+                action=self._journal_action(action),
             )
             success = await self.replay_action(action, current_state=current_state)
             if not success:
@@ -599,6 +850,36 @@ class MacroPlayer:
                 verified, observed, post_match = await self.wait_for_pre_state(
                     post_state, step_number
                 )
+                artifacts = await self._capture_artifacts(step_index, "post", observed)
+                self.journal.append(
+                    "observation",
+                    index=step_index,
+                    step=step_number,
+                    phase="post",
+                    match_score=post_match.score if post_match else None,
+                    match_reason=post_match.reason if post_match else None,
+                    verified=verified,
+                    **artifacts,
+                )
+            else:
+                try:
+                    observed = await self.get_current_state_snapshot()
+                except Exception as exc:
+                    observed = None
+                    logger.debug(
+                        "Could not observe post-state for step %s: %s", step_number, exc
+                    )
+                artifacts = await self._capture_artifacts(
+                    step_index, "post", observed
+                )
+                self.journal.append(
+                    "observation",
+                    index=step_index,
+                    step=step_number,
+                    phase="post",
+                    **artifacts,
+                )
+            if post_state:
                 if not verified:
                     reason = post_match.reason if post_match else "postcondition failed"
                     self.journal.append(
@@ -607,6 +888,7 @@ class MacroPlayer:
                         step=step_number,
                         status="FAILED",
                         action_type=action_type,
+                        action=self._journal_action(action),
                         reason=reason,
                     )
                     return self._failed_result(
@@ -624,6 +906,7 @@ class MacroPlayer:
                 step=step_number,
                 status="VERIFIED",
                 action_type=action_type,
+                action=self._journal_action(action),
             )
             if offset < len(actions) - 1 and self.delay_between_actions:
                 await asyncio.sleep(self.delay_between_actions)

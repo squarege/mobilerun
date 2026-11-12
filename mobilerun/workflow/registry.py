@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 from mobilerun.macro.contracts import RunResult
 from mobilerun.macro.replay import MacroPlayer
 from mobilerun.macro.state import MACRO_SCHEMA_VERSION
+from mobilerun.workflow.report import generate_report
 
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 _ALLOWED_ACTIONS = {
@@ -24,6 +25,8 @@ _ALLOWED_ACTIONS = {
     "swipe",
     "drag",
     "input_text",
+    "input_node_text",
+    "verify_nodes_text_equal",
     "type_secret",
     "key_press",
     "button_press",
@@ -234,6 +237,20 @@ class WorkflowRegistry:
         run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         run_dir = workflow_dir / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
+        started_at = time.time()
+        manifest = {
+            "run_id": run_id,
+            "workflow_id": workflow_id,
+            "workflow_version": int(metadata["version"]),
+            "device": device_serial,
+            "provider": provider,
+            "model": model,
+            "config_path": config_path,
+            "started_at": started_at,
+            "run_dir": str(run_dir),
+            "artifacts_dir": str(run_dir / "artifacts"),
+        }
+        self._write_json(run_dir / "manifest.json", manifest)
         policy = metadata.get("policy") or {}
         player = MacroPlayer(
             device_serial=device_serial,
@@ -245,6 +262,7 @@ class WorkflowRegistry:
             state_timeout=float(policy.get("state_timeout", 60)),
             state_threshold=float(policy.get("state_threshold", 0.85)),
             journal_path=str(run_dir / "journal.jsonl"),
+            artifacts_dir=str(run_dir / "artifacts"),
             max_recoveries=int(policy.get("max_recoveries", 1)),
             max_recovery_actions=int(policy.get("max_agent_actions_per_recovery", 5)),
             max_recovery_seconds=float(policy.get("max_recovery_seconds", 45)),
@@ -256,7 +274,34 @@ class WorkflowRegistry:
                 result.status = "FAILED"
                 result.failure_reason = reason
                 result.details["completion_check"] = "failed"
-        if result.status == "RECOVERED_AND_RESUMED":
+        if player.last_divergence is not None:
+            journal_events = self._read_journal(Path(run_dir / "journal.jsonl"))
+            recovery_actions = [
+                event
+                for event in journal_events
+                if event.get("event") == "recovery_action"
+            ]
+            candidate_actions = self._candidate_repair_actions(recovery_actions)
+            self._write_json(
+                run_dir / "repair_proposal.json",
+                {
+                    "status": "pending_review",
+                    "workflow_id": workflow_id,
+                    "workflow_version": metadata["version"],
+                    "failed_step_index": player.last_divergence.get("step_index"),
+                    "divergence": player.last_divergence,
+                    "recovery_actions": recovery_actions,
+                    "candidate_actions": candidate_actions,
+                    "run_result": result.as_dict(),
+                    "journal": str(run_dir / "journal.jsonl"),
+                    "auto_publish": False,
+                    "review_note": (
+                        "Candidate actions were inferred from a bounded recovery trace. "
+                        "Review pre_state, side effects, and repeatability before importing."
+                    ),
+                },
+            )
+        if result.status == "RECOVERED_AND_RESUMED" and player.last_divergence is None:
             self._write_json(
                 run_dir / "repair_proposal.json",
                 {
@@ -270,7 +315,94 @@ class WorkflowRegistry:
                 },
             )
         self._write_json(run_dir / "result.json", result.as_dict())
+        manifest.update(
+            {
+                "finished_at": time.time(),
+                "status": result.status,
+                "result_path": str(run_dir / "result.json"),
+                "journal_path": str(run_dir / "journal.jsonl"),
+            }
+        )
+        self._write_json(run_dir / "manifest.json", manifest)
+        result.details.update(
+            {
+                "run_id": run_id,
+                "run_dir": str(run_dir),
+                "manifest_path": str(run_dir / "manifest.json"),
+                "report_path": str(run_dir / "report.html"),
+            }
+        )
+        self._write_json(run_dir / "result.json", result.as_dict())
+        try:
+            generate_report(run_dir, run_dir / "report.html")
+        except Exception as exc:
+            result.details["report_error"] = str(exc)
+            self._write_json(run_dir / "result.json", result.as_dict())
         return result
+
+    @staticmethod
+    def _read_journal(path: Path) -> list[Dict[str, Any]]:
+        events = []
+        if not path.exists():
+            return events
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                events.append(value)
+        return events
+
+    @staticmethod
+    def _candidate_repair_actions(events: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        candidates = []
+        for event in events:
+            if not event.get("success"):
+                continue
+            action = event.get("action") or {}
+            kind = action.get("action")
+            if kind == "back":
+                candidates.append({"action_type": "back", "source": event})
+            elif kind == "wait":
+                candidates.append(
+                    {
+                        "action_type": "wait",
+                        "duration": action.get("seconds", 0.5),
+                        "source": event,
+                    }
+                )
+            elif kind == "tap" and isinstance(action.get("selector"), dict):
+                candidates.append(
+                    {
+                        "action_type": "tap_selector",
+                        "selector": action["selector"],
+                        "source": event,
+                    }
+                )
+        return candidates
+
+    def report(
+        self,
+        workflow_id: str,
+        *,
+        run_id: Optional[str] = None,
+        output: Optional[str | Path] = None,
+    ) -> Path:
+        """Generate an HTML timeline for a stored workflow run."""
+        workflow_dir = self._workflow_dir(workflow_id)
+        runs_dir = workflow_dir / "runs"
+        if run_id is None:
+            candidates = sorted(path for path in runs_dir.iterdir() if path.is_dir()) if runs_dir.exists() else []
+            if not candidates:
+                raise FileNotFoundError(f"workflow {workflow_id!r} has no runs")
+            run_dir = candidates[-1]
+        else:
+            run_dir = runs_dir / run_id
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"run {run_id!r} was not found")
+        output_path = Path(output) if output else run_dir / "report.html"
+        return generate_report(run_dir, output_path)
 
     @staticmethod
     async def _check_completion(player: MacroPlayer, check: Dict[str, Any]) -> tuple[bool, str]:

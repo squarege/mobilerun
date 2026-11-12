@@ -137,3 +137,14 @@ def run_workflow(
 def list_runs(ctx, workflow_id: str):
     """List stored run results for a workflow."""
     click.echo(json.dumps(ctx.obj["registry"].runs(workflow_id), ensure_ascii=False, indent=2))
+
+
+@workflow_cli.command("report")
+@click.argument("workflow_id")
+@click.option("--run-id", default=None, help="Run directory id; defaults to the latest run.")
+@click.option("--output", type=click.Path(), default=None, help="HTML output path.")
+@click.pass_context
+def report_workflow(ctx, workflow_id: str, run_id: Optional[str], output: Optional[str]):
+    """Generate an HTML timeline for a workflow run."""
+    report = ctx.obj["registry"].report(workflow_id, run_id=run_id, output=output)
+    click.echo(str(report))

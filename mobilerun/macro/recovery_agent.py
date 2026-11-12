@@ -8,16 +8,19 @@ as an instruction to complete and it cannot execute arbitrary tool calls.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Dict, Optional
 
-from llama_index.core.base.llms.types import ChatMessage
+from llama_index.core.base.llms.types import ChatMessage, ImageBlock, TextBlock
 
 from mobilerun.agent.utils.llm_picker import load_llm
 from mobilerun.config_manager.loader import ConfigLoader
 from mobilerun.macro.contracts import RecoveryOutcome
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+
+logger = logging.getLogger(__name__)
 
 
 class ScopedRecoveryAgent:
@@ -36,19 +39,37 @@ class ScopedRecoveryAgent:
         if max_actions <= 0:
             return RecoveryOutcome.unrecoverable("recovery action budget is zero")
 
-        if self.llm is None:
-            try:
-                self.llm = self._load_llm()
-            except Exception as exc:
-                return RecoveryOutcome.unrecoverable(f"unable to load recovery model: {exc}")
-
         actions = 0
         llm_calls = 0
         performed_actions = []
         current_state = context.get("current_state") or {}
+        failed_step_index = int(context.get("failed_step_index") or 0)
 
+        self.player.journal.append(
+            "recovery_start",
+            step_index=failed_step_index,
+            recovery_attempts=context.get("recovery_attempts"),
+            last_verified_checkpoint=context.get("last_verified_checkpoint"),
+            budget=budget,
+            divergence=context.get("divergence") or {},
+            failed_step_action=context.get("failed_step_action") or {},
+        )
+        await self._record_recovery_state(
+            failed_step_index, "recovery-before", current_state, action_count=actions
+        )
+
+        # Deterministic overlay handling runs before any model loading: a hung
+        # provider must never block a known safe local fix.
         local_fix = await self._close_known_overlay(current_state)
         if local_fix:
+            current_state = await self._safe_state()
+            await self._record_recovery_action(
+                failed_step_index,
+                actions + 1,
+                {"action": "known_overlay_fix"},
+                True,
+                current_state,
+            )
             return RecoveryOutcome.recovered_to_same_step(
                 reason="closed a uniquely identified safe overlay control",
                 agent_actions=1,
@@ -56,14 +77,37 @@ class ScopedRecoveryAgent:
                 actions=[{"action": "tap", "kind": "known_overlay_close"}],
             )
 
+        if self.llm is None:
+            try:
+                self.llm = self._load_llm()
+            except Exception as exc:
+                return RecoveryOutcome.unrecoverable(f"unable to load recovery model: {exc}")
+
         for _ in range(max_actions):
             prompt = self._prompt(context, current_state, actions, max_actions)
+            prompt_artifacts = await self.player._capture_artifacts(
+                failed_step_index,
+                f"recovery-prompt-{llm_calls + 1}",
+                current_state,
+            )
+            message = await self._build_recovery_message(prompt, prompt_artifacts)
+            self.player.journal.append(
+                "recovery_prompt",
+                call=llm_calls + 1,
+                failed_step_index=failed_step_index,
+                prompt=prompt,
+                **prompt_artifacts,
+            )
             try:
                 response = await self.llm.achat(
-                    messages=[ChatMessage(role="user", content=prompt)]
+                    messages=[message]
                 )
                 llm_calls += 1
-                payload = self._parse_response(response)
+                content = self._response_text(response)
+                # Record the raw model output (reasoning + decision JSON)
+                # before parsing so even malformed responses stay auditable.
+                self._record_llm_exchange(llm_calls, content, context)
+                payload = self._parse_payload(content)
             except Exception as exc:
                 return RecoveryOutcome.unrecoverable(
                     f"recovery model request failed: {exc}", llm_calls=llm_calls
@@ -81,21 +125,40 @@ class ScopedRecoveryAgent:
                 current_state = await self.player.get_current_state_snapshot()
                 performed_actions.append({"action": "inspect"})
                 actions += 1
+                await self._record_recovery_action(
+                    failed_step_index, actions, {"action": "inspect"}, True, current_state
+                )
                 continue
             if operation == "wait":
                 duration = max(0.0, min(float(payload.get("seconds", 0.5)), 5.0))
-                await self.player.replay_action(
+                success = await self.player.replay_action(
                     {"action_type": "wait", "duration": duration}, current_state=current_state
                 )
                 performed_actions.append({"action": "wait", "seconds": duration})
                 actions += 1
+                current_state = await self._safe_state()
+                await self._record_recovery_action(
+                    failed_step_index,
+                    actions,
+                    {"action": "wait", "seconds": duration},
+                    success,
+                    current_state,
+                )
             elif operation == "back":
-                if not await self.player.replay_action(
+                success = await self.player.replay_action(
                     {"action_type": "back"}, current_state=current_state
-                ):
+                )
+                if not success:
+                    await self._record_recovery_action(
+                        failed_step_index, actions + 1, {"action": "back"}, False, current_state
+                    )
                     return RecoveryOutcome.unrecoverable("safe back action failed", llm_calls=llm_calls)
                 performed_actions.append({"action": "back"})
                 actions += 1
+                current_state = await self._safe_state()
+                await self._record_recovery_action(
+                    failed_step_index, actions, {"action": "back"}, True, current_state
+                )
             elif operation == "tap":
                 node = self._resolve_selector(current_state, payload.get("selector"))
                 if node is None:
@@ -108,17 +171,26 @@ class ScopedRecoveryAgent:
                     return RecoveryOutcome.unrecoverable(
                         "tap target has no safe bounds", llm_calls=llm_calls
                     )
-                if not await self.player.replay_action(
+                success = await self.player.replay_action(
                     {
                         "action_type": "tap",
                         "x": bounds["center_x"],
                         "y": bounds["center_y"],
                     },
                     current_state=current_state,
-                ):
+                )
+                recovery_action = {"action": "tap", "selector": payload.get("selector")}
+                if not success:
+                    await self._record_recovery_action(
+                        failed_step_index, actions + 1, recovery_action, False, current_state
+                    )
                     return RecoveryOutcome.unrecoverable("safe tap action failed", llm_calls=llm_calls)
-                performed_actions.append({"action": "tap", "selector": payload.get("selector")})
+                performed_actions.append(recovery_action)
                 actions += 1
+                current_state = await self._safe_state()
+                await self._record_recovery_action(
+                    failed_step_index, actions, recovery_action, True, current_state
+                )
             else:
                 return RecoveryOutcome.unrecoverable(
                     f"unsupported recovery operation: {operation!r}", llm_calls=llm_calls
@@ -156,6 +228,17 @@ class ScopedRecoveryAgent:
         safe_context = {
             "reason": (context.get("divergence") or {}).get("reason"),
             "failed_step_index": context.get("failed_step_index"),
+            "last_verified_checkpoint": context.get("last_verified_checkpoint"),
+            "expected_pre_state": ScopedRecoveryAgent._redact_state(
+                (context.get("failed_step_action") or {}).get("pre_state") or {}
+            ),
+            "failed_step_action": ScopedRecoveryAgent._redact_action(
+                context.get("failed_step_action") or {}
+            ),
+            "remaining_actions": [
+                ScopedRecoveryAgent._redact_action(action)
+                for action in (context.get("remaining_actions") or [])[:3]
+            ],
             "current_state": ScopedRecoveryAgent._redact_state(current_state),
             "actions_used": actions,
             "action_limit": limit,
@@ -179,17 +262,102 @@ class ScopedRecoveryAgent:
 
     @staticmethod
     def _parse_response(response: Any) -> Dict[str, Any]:
+        return ScopedRecoveryAgent._parse_payload(
+            ScopedRecoveryAgent._response_text(response)
+        )
+
+    @staticmethod
+    def _response_text(response: Any) -> str:
         content = getattr(getattr(response, "message", None), "content", None)
         if content is None:
             content = getattr(response, "content", response)
         if not isinstance(content, str):
             raise ValueError("recovery model returned non-text content")
+        return content
+
+    @staticmethod
+    def _parse_payload(content: str) -> Dict[str, Any]:
         match = _JSON_BLOCK.search(content)
         raw = match.group(1) if match else content.strip()
         payload = json.loads(raw)
         if not isinstance(payload, dict):
             raise ValueError("recovery response must be a JSON object")
         return payload
+
+    def _record_llm_exchange(
+        self, call: int, content: str, context: Dict[str, Any]
+    ) -> None:
+        """Persist the raw recovery model output to the run journal.
+
+        Without this the response is parsed and discarded, leaving only an
+        aggregate llm_calls count, and there is no way to review what the
+        model was thinking when recovery fired.
+        """
+        self.player.journal.append(
+            "recovery_llm",
+            call=call,
+            failed_step_index=context.get("failed_step_index"),
+            content=content,
+        )
+        logger.info("🧠 recovery LLM call #%s: %s", call, content)
+
+    async def _safe_state(self) -> Dict[str, Any]:
+        try:
+            return await self.player.get_current_state_snapshot()
+        except Exception as exc:
+            logger.debug("Could not capture recovery state: %s", exc)
+            return {}
+
+    async def _build_recovery_message(
+        self, prompt: str, artifacts: Dict[str, str]
+    ) -> ChatMessage:
+        """Attach the current screenshot when the configured model accepts images."""
+        screenshot_path = artifacts.get("screenshot_path")
+        if screenshot_path and self.player.artifacts_dir:
+            path = self.player.artifacts_dir.parent / screenshot_path
+            try:
+                return ChatMessage(
+                    role="user",
+                    blocks=[
+                        TextBlock(text=prompt),
+                        ImageBlock(image=path.read_bytes()),
+                    ],
+                )
+            except OSError:
+                pass
+        return ChatMessage(role="user", content=prompt)
+
+    async def _record_recovery_state(
+        self, step_index: int, phase: str, state: Dict[str, Any], *, action_count: int
+    ) -> None:
+        artifacts = await self.player._capture_artifacts(step_index, phase, state)
+        self.player.journal.append(
+            "recovery_state",
+            step_index=step_index,
+            phase=phase,
+            action_count=action_count,
+            **artifacts,
+        )
+
+    async def _record_recovery_action(
+        self,
+        step_index: int,
+        action_number: int,
+        action: Dict[str, Any],
+        success: bool,
+        state: Dict[str, Any],
+    ) -> None:
+        artifacts = await self.player._capture_artifacts(
+            step_index, f"recovery-{action_number}", state
+        )
+        self.player.journal.append(
+            "recovery_action",
+            step_index=step_index,
+            action_number=action_number,
+            action=action,
+            success=success,
+            **artifacts,
+        )
 
     async def _close_known_overlay(self, state: Dict[str, Any]) -> bool:
         """Close only a narrowly identified ad/web overlay control.
@@ -205,6 +373,33 @@ class ScopedRecoveryAgent:
             for text in texts
         )
         if account_overlay:
+            return await self.player.replay_action(
+                {"action_type": "back"}, current_state=state
+            )
+
+        # Transient network-error dialog (e.g. "请求失败，请稍后再试"): retrying a
+        # failed page load is an idempotent navigation fix, not a business side
+        # effect. Only tap a uniquely labeled retry/confirm control.
+        request_failure = any("请求失败" in text for text in texts)
+        if request_failure:
+            candidates = [
+                node
+                for node in nodes
+                if str(node.get("text") or "") in {"重试", "确定", "好", "知道了"}
+            ]
+            if len(candidates) == 1:
+                bounds = candidates[0].get("bounds") or {}
+                if "center_x" in bounds and "center_y" in bounds:
+                    return await self.player.replay_action(
+                        {
+                            "action_type": "tap",
+                            "x": bounds["center_x"],
+                            "y": bounds["center_y"],
+                        },
+                        current_state=state,
+                    )
+            # No unique retry control: dismiss with back so the guarded step
+            # can re-observe the underlying page.
             return await self.player.replay_action(
                 {"action_type": "back"}, current_state=state
             )
@@ -267,6 +462,15 @@ class ScopedRecoveryAgent:
                 node["content_description"] = "<redacted>"
             nodes.append(node)
         redacted["nodes"] = nodes
+        return redacted
+
+    @staticmethod
+    def _redact_action(action: Dict[str, Any]) -> Dict[str, Any]:
+        redacted = dict(action)
+        if redacted.get("action_type", redacted.get("type")) == "type_secret":
+            for key in ("text", "value", "secret", "secret_value"):
+                if key in redacted:
+                    redacted[key] = "<redacted>"
         return redacted
 
     @staticmethod
