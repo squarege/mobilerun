@@ -146,12 +146,12 @@ device:
   control_backend: null
   # Device id for backends that expose multiple devices
   device_id: auto
-  # Use TCP communication instead of usb
-  use_tcp: false
+  # Use TCP communication instead of usb (more reliable for Portal state)
+  use_tcp: true
   # Platform: android or ios
   platform: android
-  # Android only: auto = ADB-first with optional Portal, required = fail without Portal, disabled = ADB-only.
-  portal_mode: auto
+  # Android only: require Portal so a failed Portal read never silently falls back to UIAutomator.
+  portal_mode: required
   # Android only: auto-install/update Portal APK and enable accessibility before each run.
   # iOS requires a running iOS Portal URL or discovery through iproxy.
   auto_setup: true

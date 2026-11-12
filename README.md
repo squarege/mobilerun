@@ -136,6 +136,12 @@ mobilerun configure --provider minimax_dsml --model your-model --base-url http:/
 
 The custom provider accepts any model name, uses the supplied endpoint, and parses MiniMax/DeepSeek DSML tool calls.
 
+#### Configuration scopes
+
+When running from a project directory, Mobilerun uses a local `config.yaml` in that directory. This lets a checkout use its own configuration while a globally installed Mobilerun continues using the user configuration under `~/Library/Application Support/droidrun/config.yaml` on macOS. An explicit `--config` path or `MOBILERUN_CONFIG` environment variable takes precedence over both.
+
+To initialize a local configuration, copy `mobilerun/config_example.yaml` to `config.yaml`, then run `uv run mobilerun configure` from the project directory. The local file is ignored by Git.
+
 ### 4. Run your first command
 
 ```bash

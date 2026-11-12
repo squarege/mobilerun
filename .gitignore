@@ -5,6 +5,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 trajectories/
+logs/
+workflows/**/runs/
 *.class
 
 test.py
@@ -34,6 +36,9 @@ credentials.yaml
 .*/
 !.gitignore
 !.github/
+!.agents/
+!.agents/skills/
+!.agents/skills/**
 
 backend/
 frontend/

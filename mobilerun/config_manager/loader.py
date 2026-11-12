@@ -34,22 +34,40 @@ class ConfigLoader:
         return cls.get_user_config_dir() / cls.CONFIG_FILE
 
     @classmethod
+    def get_project_config_path(cls) -> Path:
+        """Return the optional config file scoped to the current project."""
+        return Path.cwd() / cls.CONFIG_FILE
+
+    @classmethod
+    def get_default_config_path(cls) -> Path:
+        """Return the config path selected when no explicit path is given."""
+        env_config = os.environ.get("MOBILERUN_CONFIG") or os.environ.get(
+            "DROIDRUN_CONFIG"
+        )
+        if env_config and Path(env_config).exists():
+            return Path(env_config)
+
+        project_config_path = cls.get_project_config_path()
+        if project_config_path.exists():
+            return project_config_path
+
+        return cls.get_user_config_path()
+
+    @classmethod
     def load(cls, config_path: Optional[str] = None) -> MobileConfig:
         """
         Load config with resolution order:
         1. Explicit config_path argument
         2. MOBILERUN_CONFIG env var
-        3. User config (platformdirs config dir for "droidrun", e.g.
+        3. Project config (``config.yaml`` in the current directory)
+        4. User config (platformdirs config dir for "droidrun", e.g.
            ~/Library/Application Support/droidrun/config.yaml on macOS,
            ~/.config/droidrun/config.yaml on Linux)
-        4. Package defaults (creates user config)
+        5. Package defaults (creates user config)
         """
         if config_path:
             return cls._load_user_config(Path(config_path))
 
-        env_config = os.environ.get("MOBILERUN_CONFIG") or os.environ.get(
-            "DROIDRUN_CONFIG"
-        )
         if os.environ.get("DROIDRUN_CONFIG") and not os.environ.get("MOBILERUN_CONFIG"):
             import warnings
 
@@ -58,13 +76,10 @@ class ConfigLoader:
                 DeprecationWarning,
                 stacklevel=2,
             )
-        if env_config and Path(env_config).exists():
-            return cls._load_user_config(Path(env_config))
 
-        user_config_path = cls.get_user_config_path()
-
-        if user_config_path.exists():
-            return cls._load_user_config(user_config_path)
+        default_config_path = cls.get_default_config_path()
+        if default_config_path.exists():
+            return cls._load_user_config(default_config_path)
 
         return cls._init_user_config()
 
@@ -98,10 +113,10 @@ class ConfigLoader:
 
     @classmethod
     def save(cls, config: MobileConfig) -> Path:
-        """Save config to user config path."""
+        """Save config to the same default scope used by :meth:`load`."""
         config_dict = config.to_dict()
         config_dict["_version"] = CURRENT_VERSION
-        return cls._save_dict(config_dict, cls.get_user_config_path())
+        return cls._save_dict(config_dict, cls.get_default_config_path())
 
     @classmethod
     def _save_dict(cls, config_dict: Dict[str, Any], path: Path) -> Path:
