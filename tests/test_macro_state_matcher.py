@@ -28,6 +28,42 @@ def _state(text="Continue", bounds="10,20,110,60", extra=None):
     }
 
 
+def test_normalize_accepts_a_single_dict_a11y_root():
+    state = normalize_ui_state(
+        {
+            "a11y_tree": {
+                "resourceId": "com.example:id/root",
+                "className": "android.view.View",
+                "bounds": "0,0,10,10",
+            }
+        }
+    )
+
+    assert state["nodes"][0]["resource_id"] == "com.example:id/root"
+
+
+def test_package_mismatch_is_a_hard_failure():
+    saved = normalize_ui_state(_state())
+    observed = normalize_ui_state(
+        {
+            **_state(),
+            "phone_state": {"package": "other.app", "activity": ".MainActivity"},
+        }
+    )
+
+    result = compare_states(saved, observed, threshold=0.85)
+
+    assert not result.matches
+    assert "package mismatch" in result.reason
+
+
+def test_empty_states_do_not_match_without_evidence():
+    result = compare_states({}, {})
+
+    assert not result.matches
+    assert "no matchable evidence" in result.reason
+
+
 def test_normalized_matching_ignores_volatile_fields_but_detects_meaningful_changes():
     saved = normalize_ui_state(_state(extra={"index": 99, "visible": True}))
     same_screen = normalize_ui_state(_state(extra={"index": 1, "visible": False}))

@@ -8,13 +8,17 @@ that were generated during MobileAgent trajectory recording.
 import asyncio
 import logging
 import time
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, Optional
 
 from mobilerun_core_local.driver.android import AndroidDriver
 
 from mobilerun.agent.utils.trajectory import Trajectory
+from mobilerun.macro.contracts import RecoveryOutcome, RunResult
 from mobilerun.macro.handoff import run_agent_handoff
+from mobilerun.macro.journal import RunJournal
 from mobilerun.macro.matcher import StateMatchResult, compare_states
+from mobilerun.macro.recovery_agent import ScopedRecoveryAgent
 from mobilerun.macro.state import (
     MACRO_SCHEMA_VERSION,
     UNSUPPORTED_SCHEMA_MESSAGE,
@@ -47,9 +51,14 @@ class MacroPlayer:
         state_threshold: float = 0.85,
         state_poll_interval: float = 0.5,
         handoff_runner=None,
+        recovery_runner=None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
         config_path: Optional[str] = None,
+        journal_path: Optional[str] = None,
+        max_recoveries: int = 1,
+        max_recovery_actions: int = 5,
+        max_recovery_seconds: float = 45.0,
     ):
         """
         Initialize the MacroPlayer.
@@ -65,11 +74,19 @@ class MacroPlayer:
         self.state_threshold = state_threshold
         self.state_poll_interval = state_poll_interval
         self.handoff_runner = handoff_runner or run_agent_handoff
+        self.recovery_runner = recovery_runner
+        if self.recovery_runner is None and on_mismatch == "recover":
+            self.recovery_runner = ScopedRecoveryAgent(self)
         self.provider = provider
         self.model = model
         self.config_path = config_path
+        self.max_recoveries = max(0, max_recoveries)
+        self.max_recovery_actions = max(0, max_recovery_actions)
+        self.max_recovery_seconds = max(0.0, max_recovery_seconds)
+        self.journal = RunJournal(journal_path)
         self.last_divergence: Optional[Dict[str, Any]] = None
         self.state_provider = None
+        self._auto_state_provider = False
         self.driver: AndroidDriver | None = None
         self.credential_manager = None
         self._credential_load_error: Optional[str] = None
@@ -146,13 +163,57 @@ class MacroPlayer:
                 tree_formatter=IndexedFormatter(),
                 use_normalized=False,
             )
+            self._auto_state_provider = True
         if self.state_provider is not None:
             try:
                 return normalize_ui_state(await self.state_provider.get_state())
             except Exception as e:
                 logger.debug("Falling back to raw driver state: %s", e)
-        raw_state = await driver.get_ui_tree()
-        return normalize_ui_state(raw_state)
+        try:
+            raw_state = await driver.get_ui_tree()
+            return normalize_ui_state(raw_state)
+        except Exception as e:
+            logger.debug("Falling back to file-based UI dump: %s", e)
+            return normalize_ui_state(await self._get_file_based_ui_state(driver))
+
+    async def _get_file_based_ui_state(self, driver: AndroidDriver) -> Dict[str, Any]:
+        """Read an Android UI dump through a file when /dev/tty is unavailable."""
+        device = getattr(driver, "device", None)
+        if device is None:
+            raise RuntimeError("Android driver does not expose an ADB device")
+        path = "/sdcard/mobilerun_macro_window.xml"
+        await device.shell(f"uiautomator dump {path}")
+        raw_xml = await device.shell(f"cat {path}")
+        start = raw_xml.find("<?xml")
+        end = raw_xml.find("</hierarchy>", start)
+        if start < 0 or end < 0:
+            raise ValueError("file-based UI dump did not contain XML")
+        root = ET.fromstring(raw_xml[start : end + len("</hierarchy>")])
+
+        def convert(element):
+            attrs = element.attrib
+            node = {
+                "resourceId": attrs.get("resource-id", ""),
+                "className": attrs.get("class", ""),
+                "text": attrs.get("text", ""),
+                "contentDescription": attrs.get("content-desc", ""),
+                "clickable": attrs.get("clickable", "false"),
+                "enabled": attrs.get("enabled", "true"),
+                "focused": attrs.get("focused", "false"),
+                "bounds": attrs.get("bounds", ""),
+                "children": [convert(child) for child in element],
+            }
+            return node
+
+        children = [convert(child) for child in root]
+        package = next(
+            (node.attrib.get("package") for node in root.iter() if node.attrib.get("package")),
+            None,
+        )
+        return {
+            "a11y_tree": children,
+            "phone_state": {"packageName": package},
+        }
 
     async def wait_for_pre_state(
         self, pre_state: Optional[Dict[str, Any]], step_number: int
@@ -199,15 +260,52 @@ class MacroPlayer:
             if action_type == "start_app":
                 package = action.get("package")
                 activity = action.get("activity", None)
-                await driver.start_app(package, activity)
-                return True
+                if package and getattr(driver, "device", None) is not None:
+                    # ``monkey`` reliably starts apps whose launcher activity
+                    # has an intermediate splash screen; it also avoids
+                    # resuming a stale transaction page between workflow runs.
+                    await driver.device.shell(f"am force-stop {package}")
+                    result = await driver.device.shell(f"monkey -p {package} 1")
+                else:
+                    result = await driver.start_app(package, activity)
+                if isinstance(result, str) and result.lower().startswith("failed"):
+                    return False
+                await asyncio.sleep(5.0)
+                return result is not False
+
+            elif action_type == "tap_selector":
+                selector = action.get("selector") or {}
+                state = current_state or await self.get_current_state_snapshot()
+                matches = [
+                    node
+                    for node in state.get("nodes", [])
+                    if all(node.get(key) == value for key, value in selector.items())
+                ]
+                if len(matches) != 1:
+                    logger.error(
+                        "❌ Selector matched %s nodes; refusing ambiguous tap: %s",
+                        len(matches),
+                        selector,
+                    )
+                    return False
+                bounds = matches[0].get("bounds") or {}
+                if "center_x" not in bounds or "center_y" not in bounds:
+                    return False
+                logger.info(
+                    "🫰 Tapping selector %s at (%s, %s)",
+                    selector,
+                    bounds["center_x"],
+                    bounds["center_y"],
+                )
+                result = await driver.tap(bounds["center_x"], bounds["center_y"])
+                return result is not False
 
             elif action_type == "tap":
                 x = action.get("x", 0)
                 y = action.get("y", 0)
                 logger.info(f"🫰 Tapping at ({x}, {y})")
-                await driver.tap(x, y)
-                return True
+                result = await driver.tap(x, y)
+                return result is not False
 
             elif action_type == "swipe":
                 start_x = action.get("start_x", 0)
@@ -243,8 +341,8 @@ class MacroPlayer:
                 text = action.get("text", "")
                 clear = action.get("clear", False)
                 logger.info(f"⌨️  Inputting text: '{text}'")
-                await driver.input_text(text, clear)
-                return True
+                result = await driver.input_text(text, clear)
+                return result is not False
 
             elif action_type == "type_secret":
                 secret_id = action.get("secret_id")
@@ -274,8 +372,8 @@ class MacroPlayer:
                     return False
 
                 logger.info("⌨️  Inputting secret: '%s'", secret_id)
-                await driver.input_text(secret_value, clear)
-                return True
+                result = await driver.input_text(secret_value, clear)
+                return result is not False
 
             elif action_type == "key_press":
                 keycode = action.get("keycode", 0)
@@ -284,7 +382,8 @@ class MacroPlayer:
                     logger.info(f"🔘 Pressing button: {button}")
                     await driver.press_button(button)
                 else:
-                    logger.warning(f"⚠️  Unknown keycode {keycode}, skipping")
+                    logger.warning(f"⚠️  Unknown keycode {keycode}")
+                    return False
                 return True
 
             elif action_type == "button_press":
@@ -312,69 +411,83 @@ class MacroPlayer:
             logger.error(f"❌ Error executing action {action_type}: {e}")
             return False
 
-    async def replay_macro(
+    async def replay_macro_result(
         self,
         macro_data: Dict[str, Any],
         start_from_step: int = 0,
         max_steps: Optional[int] = None,
-    ) -> bool:
-        """
-        Replay a complete macro sequence.
-
-        Args:
-            macro_data: Macro data dictionary loaded from JSON
-            start_from_step: Step number to start from (0-based, default: 0)
-            max_steps: Maximum number of steps to execute (default: all)
-
-        Returns:
-            True if all actions were executed successfully, False otherwise
-        """
+    ) -> RunResult:
+        """Replay a macro and return an auditable structured result."""
         if not macro_data or "actions" not in macro_data:
             logger.error("❌ Invalid macro data - no actions found")
-            return False
+            return RunResult(status="FAILED", failure_reason="no actions found")
         if macro_data.get("macro_schema_version") != MACRO_SCHEMA_VERSION:
             raise ValueError(UNSUPPORTED_SCHEMA_MESSAGE)
 
-        actions = macro_data["actions"]
+        all_actions = macro_data["actions"]
         description = macro_data.get("description", "Unknown macro")
-        total_actions = len(actions)
-
-        # Apply start_from_step and max_steps filters
-        if start_from_step > 0:
-            actions = actions[start_from_step:]
-            logger.info(f"📍 Starting from step {start_from_step + 1}")
-
+        total_actions = len(all_actions)
+        actions = all_actions[start_from_step:]
         if max_steps is not None:
             actions = actions[:max_steps]
-            logger.info(f"🎯 Limiting to {max_steps} steps")
+
+        result = RunResult(
+            status="MACRO_SUCCESS",
+            total_steps=len(actions),
+            last_verified_checkpoint=start_from_step - 1,
+            journal_path=str(self.journal.path) if self.journal.path else None,
+        )
+        recovered = False
+        recovery_attempts = 0
 
         logger.info(f"🎬 Starting macro replay: '{description}'")
         logger.info(f"📊 Total actions to execute: {len(actions)} / {total_actions}")
 
-        success_count = 0
-        failed_count = 0
-
-        for i, action in enumerate(actions, start=start_from_step + 1):
+        for offset, action in enumerate(actions):
+            step_index = start_from_step + offset
+            step_number = step_index + 1
             action_type = action.get("action_type", action.get("type", "unknown"))
-            description_text = action.get("description", "")
-
-            logger.info(f"\n📍 Step {i}/{total_actions}: {action_type}")
-            if description_text:
-                logger.info(f"   Description: {description_text}")
-
-            state_matched, current_state, match_result = await self.wait_for_pre_state(
-                action.get("pre_state"), i
+            self.journal.append(
+                "step",
+                index=step_index,
+                step=step_number,
+                status="PENDING",
+                action_type=action_type,
             )
-            if not state_matched:
+
+            while True:
+                # Entry actions are responsible for establishing their own app
+                # context; requiring the recorder's launcher snapshot here makes
+                # replay depend on launcher layout, date widgets, and icons.
+                if action_type in {"start_app", "wait"}:
+                    # start_app establishes context; wait is deliberately a
+                    # state-agnostic settling barrier. The next side-effecting
+                    # action still performs the guarded precondition check.
+                    current_state, match_result = None, None
+                    state_matched = True
+                else:
+                    state_matched, current_state, match_result = await self.wait_for_pre_state(
+                        action.get("pre_state"), step_number
+                    )
+                if state_matched:
+                    break
+
                 self.last_divergence = {
-                    "step": i,
+                    "step": step_number,
+                    "step_index": step_index,
                     "action_type": action_type,
                     "reason": match_result.reason if match_result else "state mismatch",
                     "score": match_result.score if match_result else None,
+                    "expected_pre_state": action.get("pre_state") or {},
+                    "observed_state": current_state or {},
+                    "last_verified_checkpoint": result.last_verified_checkpoint,
+                    "remaining_actions": all_actions[step_index:],
                 }
+                self.journal.append("divergence", **self.last_divergence)
+
                 if self.on_mismatch == "agent":
                     logger.warning("🤖 Handing off to agent after macro divergence")
-                    return await self.handoff_runner(
+                    fallback = await self.handoff_runner(
                         goal=description,
                         device_serial=self.device_serial,
                         provider=self.provider,
@@ -382,43 +495,248 @@ class MacroPlayer:
                         config_path=self.config_path,
                         divergence=self.last_divergence,
                         current_state=current_state or {},
-                        remaining_actions=macro_data["actions"][i - 1 :],
+                        remaining_actions=all_actions[step_index:],
                     )
-                return False
+                    return RunResult(
+                        status="FALLBACK_COMPLETED" if fallback else "BLOCKED",
+                        total_steps=len(actions),
+                        steps_completed=offset,
+                        llm_calls=1,
+                        recovery_attempts=1,
+                        last_verified_checkpoint=result.last_verified_checkpoint,
+                        failure_reason=None if fallback else "agent handoff failed",
+                        journal_path=result.journal_path,
+                    )
 
-            # Execute the action
+                if self.on_mismatch != "recover":
+                    return self._failed_result(result, offset, self.last_divergence["reason"])
+                if recovery_attempts >= self.max_recoveries:
+                    return self._failed_result(result, offset, "recovery budget exhausted")
+                if self.recovery_runner is None:
+                    return self._failed_result(
+                        result, offset, "no scoped recovery runner configured"
+                    )
+
+                recovery_attempts += 1
+                result.recovery_attempts = recovery_attempts
+                outcome = await self._run_recovery(
+                    description=description,
+                    divergence=self.last_divergence,
+                    current_state=current_state or {},
+                    remaining_actions=all_actions[step_index:],
+                    failed_step_index=step_index,
+                    failed_step_action=action,
+                    last_verified_checkpoint=result.last_verified_checkpoint,
+                    recovery_attempts=recovery_attempts,
+                    recovery_budget={
+                        "max_recoveries": self.max_recoveries,
+                        "max_actions": self.max_recovery_actions,
+                        "max_seconds": self.max_recovery_seconds,
+                    },
+                )
+                result.llm_calls += outcome.llm_calls
+                if outcome.agent_actions > self.max_recovery_actions:
+                    return self._failed_result(
+                        result, offset, "recovery action budget exceeded"
+                    )
+                self.journal.append(
+                    "recovery",
+                    step_index=step_index,
+                    status=outcome.status,
+                    reason=outcome.reason,
+                    agent_actions=outcome.agent_actions,
+                    llm_calls=outcome.llm_calls,
+                    metadata=outcome.metadata,
+                )
+                if not outcome.recovered:
+                    failure_status = (
+                        "UNKNOWN_OUTCOME"
+                        if outcome.status == "UNKNOWN_OUTCOME"
+                        else "BLOCKED"
+                    )
+                    return self._failed_result(
+                        result,
+                        offset,
+                        outcome.reason or outcome.status,
+                        status=failure_status,
+                    )
+                if outcome.status == "RECOVERED_TO_CHECKPOINT" and (
+                    outcome.checkpoint is None or outcome.checkpoint != step_index
+                ):
+                    return self._failed_result(
+                        result,
+                        offset,
+                        "recovery may only resume at the failed step without an explicit verifier",
+                    )
+                recovered = True
+
+            self.journal.append(
+                "step",
+                index=step_index,
+                step=step_number,
+                status="STARTED",
+                action_type=action_type,
+            )
             success = await self.replay_action(action, current_state=current_state)
+            if not success:
+                status = "UNKNOWN_OUTCOME" if self._is_high_risk(action) else "FAILED"
+                self.journal.append(
+                    "step",
+                    index=step_index,
+                    step=step_number,
+                    status=status,
+                    action_type=action_type,
+                )
+                return self._failed_result(
+                    result,
+                    offset,
+                    f"{status.lower()}: action failed: {action_type}",
+                    status=status,
+                )
 
-            if success:
-                success_count += 1
-                logger.info("   ✅ Action completed successfully")
-            else:
-                failed_count += 1
-                logger.error("   ❌ Action failed")
+            post_state = action.get("post_state")
+            if post_state:
+                verified, observed, post_match = await self.wait_for_pre_state(
+                    post_state, step_number
+                )
+                if not verified:
+                    reason = post_match.reason if post_match else "postcondition failed"
+                    self.journal.append(
+                        "step",
+                        index=step_index,
+                        step=step_number,
+                        status="FAILED",
+                        action_type=action_type,
+                        reason=reason,
+                    )
+                    return self._failed_result(
+                        result,
+                        offset,
+                        reason,
+                        status="UNKNOWN_OUTCOME" if self._is_high_risk(action) else "FAILED",
+                    )
 
-            # Wait between actions (except for the last one)
-            if i < start_from_step + len(actions):
-                logger.debug(f"   ⏳ Waiting {self.delay_between_actions}s...")
+            result.steps_completed = offset + 1
+            result.last_verified_checkpoint = step_index
+            self.journal.append(
+                "step",
+                index=step_index,
+                step=step_number,
+                status="VERIFIED",
+                action_type=action_type,
+            )
+            if offset < len(actions) - 1 and self.delay_between_actions:
                 await asyncio.sleep(self.delay_between_actions)
 
-        # Summary
-        total_executed = success_count + failed_count
-        success_rate = (
-            (success_count / total_executed * 100) if total_executed > 0 else 0
+        result.status = "RECOVERED_AND_RESUMED" if recovered else "MACRO_SUCCESS"
+        result.recovery_attempts = recovery_attempts
+        return result
+
+    async def replay_macro(
+        self,
+        macro_data: Dict[str, Any],
+        start_from_step: int = 0,
+        max_steps: Optional[int] = None,
+    ) -> bool:
+        """Backward-compatible boolean wrapper around :meth:`replay_macro_result`."""
+        return (
+            await self.replay_macro_result(
+                macro_data, start_from_step=start_from_step, max_steps=max_steps
+            )
+        ).success
+
+    async def _run_recovery(self, **context: Any) -> RecoveryOutcome:
+        try:
+            if self.max_recovery_seconds <= 0:
+                return RecoveryOutcome.unrecoverable("recovery time budget is zero")
+            outcome = await asyncio.wait_for(
+                self.recovery_runner(**context), timeout=self.max_recovery_seconds
+            )
+        except asyncio.TimeoutError:
+            return RecoveryOutcome.unrecoverable("recovery time budget exhausted")
+        if isinstance(outcome, RecoveryOutcome):
+            return outcome
+        if isinstance(outcome, dict):
+            return RecoveryOutcome(**outcome)
+        return RecoveryOutcome.unrecoverable(
+            "recovery runner must return RecoveryOutcome"
         )
 
-        logger.info("\n🎉 Macro replay completed!")
-        logger.info(
-            f"📊 Success: {success_count}/{total_executed} ({success_rate:.1f}%)"
+    @staticmethod
+    def _is_high_risk(action: Dict[str, Any]) -> bool:
+        if str(action.get("risk", "")).lower() == "high":
+            return True
+        action_type = action.get("action_type", action.get("type", ""))
+        return action_type in {
+            "send",
+            "submit",
+            "purchase",
+            "pay",
+            "delete",
+            "authorize",
+            "confirm",
+        }
+
+    @staticmethod
+    def _failed_result(
+        result: RunResult,
+        offset: int,
+        reason: str,
+        *,
+        status: Optional[str] = None,
+    ) -> RunResult:
+        result.status = status or (
+            "BLOCKED" if "recovery" in reason or "human" in reason else "FAILED"
         )
-
-        if failed_count > 0:
-            logger.warning(f"⚠️  Failed actions: {failed_count}")
-
-        return failed_count == 0
+        result.steps_completed = offset
+        result.failure_reason = reason
+        return result
 
 
 # Utility functions for convenience
+
+
+async def replay_macro_file_result(
+    macro_file_path: str,
+    device_serial: str = None,
+    delay_between_actions: float = 1.0,
+    start_from_step: int = 0,
+    max_steps: Optional[int] = None,
+    on_mismatch: str = "stop",
+    state_timeout: float = 5.0,
+    state_threshold: float = 0.85,
+    recovery_runner=None,
+) -> RunResult:
+    """
+    Convenience function to replay a macro from a file.
+
+    Args:
+        macro_file_path: Path to the macro JSON file
+        device_serial: Target device serial (optional)
+        delay_between_actions: Delay between actions in seconds
+        start_from_step: Step to start from (0-based)
+        max_steps: Maximum steps to execute
+
+    Returns:
+        Structured run result.
+    """
+    player = MacroPlayer(
+        device_serial=device_serial,
+        delay_between_actions=delay_between_actions,
+        on_mismatch=on_mismatch,
+        state_timeout=state_timeout,
+        state_threshold=state_threshold,
+        recovery_runner=recovery_runner,
+    )
+
+    try:
+        macro_data = player.load_macro_from_file(macro_file_path)
+        return await player.replay_macro_result(
+            macro_data, start_from_step=start_from_step, max_steps=max_steps
+        )
+    except Exception as e:
+        logger.error(f"❌ Error replaying macro file {macro_file_path}: {e}")
+        return RunResult(status="FAILED", failure_reason=str(e))
 
 
 async def replay_macro_file(
@@ -431,35 +749,18 @@ async def replay_macro_file(
     state_timeout: float = 5.0,
     state_threshold: float = 0.85,
 ) -> bool:
-    """
-    Convenience function to replay a macro from a file.
-
-    Args:
-        macro_file_path: Path to the macro JSON file
-        device_serial: Target device serial (optional)
-        delay_between_actions: Delay between actions in seconds
-        start_from_step: Step to start from (0-based)
-        max_steps: Maximum steps to execute
-
-    Returns:
-        True if replay was successful, False otherwise
-    """
-    player = MacroPlayer(
+    """Backward-compatible boolean wrapper for file replay."""
+    result = await replay_macro_file_result(
+        macro_file_path,
         device_serial=device_serial,
         delay_between_actions=delay_between_actions,
+        start_from_step=start_from_step,
+        max_steps=max_steps,
         on_mismatch=on_mismatch,
         state_timeout=state_timeout,
         state_threshold=state_threshold,
     )
-
-    try:
-        macro_data = player.load_macro_from_file(macro_file_path)
-        return await player.replay_macro(
-            macro_data, start_from_step=start_from_step, max_steps=max_steps
-        )
-    except Exception as e:
-        logger.error(f"❌ Error replaying macro file {macro_file_path}: {e}")
-        return False
+    return result.success
 
 
 async def replay_macro_folder(

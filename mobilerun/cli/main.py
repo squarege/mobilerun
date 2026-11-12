@@ -79,6 +79,7 @@ from mobilerun.config_manager.credential_paths import (
 from mobilerun.log_handlers import CLILogHandler, configure_logging
 from mobilerun.macro.cli import macro_cli
 from mobilerun.telemetry import print_telemetry_message
+from mobilerun.workflow.cli import workflow_cli
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -1094,6 +1095,9 @@ async def ping(device: str | None, tcp: bool | None, debug: bool | None):
 
 # Add macro commands as a subgroup
 cli.add_command(macro_cli, name="macro")
+
+# Add versioned workflow commands as a subgroup
+cli.add_command(workflow_cli, name="workflow")
 
 # Add device action commands as a subgroup
 cli.add_command(device_cli, name="device")

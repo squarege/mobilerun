@@ -25,9 +25,11 @@ def normalize_ui_state(ui_state: Any) -> Dict[str, Any]:
     return {
         "phone_state": {
             "package": _first_present(
-                phone_state, "package", "appPackage", "bundle_id"
+                phone_state, "package", "packageName", "appPackage", "bundle_id"
             ),
-            "activity": _first_present(phone_state, "activity", "appActivity"),
+            "activity": _first_present(
+                phone_state, "activity", "currentApp", "appActivity"
+            ),
         },
         "screen": screen,
         "nodes": nodes,
@@ -62,6 +64,8 @@ def _extract_elements(ui_state: Any) -> List[Dict[str, Any]]:
             value = ui_state.get("a11y_tree")
         if value is None:
             value = ui_state.get("nodes")
+        if isinstance(value, dict):
+            return [value]
         return value or []
     return getattr(ui_state, "elements", []) or []
 

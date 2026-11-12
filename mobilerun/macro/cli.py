@@ -67,7 +67,7 @@ def macro_cli():
 )
 @click.option(
     "--on-mismatch",
-    type=click.Choice(["stop", "agent"]),
+    type=click.Choice(["stop", "agent", "recover"]),
     default="stop",
     show_default=True,
     help="What to do when the current UI does not match the recorded pre-action state.",

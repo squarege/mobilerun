@@ -260,6 +260,8 @@ Mobilerun is one piece of a toolkit for driving real phones with AI agents:
 - [Agent architecture](https://docs.mobilerun.ai/framework/concepts/architecture)
 - [Structured output](https://docs.mobilerun.ai/framework/features/structured-output)
 - [Tracing](https://docs.mobilerun.ai/framework/features/tracing)
+- [Workflow test-runner guide](docs/workflow-runbook.md)
+- [Workflow gap analysis](docs/workflow-gap-analysis.md)
 
 ## 👥 Contributing
 
