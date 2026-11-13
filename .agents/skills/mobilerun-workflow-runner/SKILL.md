@@ -1,8 +1,6 @@
 ---
 name: mobilerun-workflow-runner
 description: Run an existing Mobilerun workflow interactively. When invoked directly, first list available workflows, let the user choose one, collect device/version/mode/repetition requirements, execute with or without AI recovery, batch-run when requested, and produce an auditable summary report.
-disable-model-invocation: true
-compatibility: Requires a Mobilerun repository, uv/Python, a supported device, and any configured credentials needed by the selected workflow.
 ---
 
 # Mobilerun Workflow Runner
@@ -23,7 +21,7 @@ When this skill is invoked directly:
    - divergence mode: `stop` for no AI correction, or `recover` for bounded AI/local recovery;
    - run count, default `1`;
    - whether to stop the batch after the first failure or continue all requested runs;
-   - report path, default `docs/<workflow-id>-run-report.md`.
+   - report path. Use a local ignored run-artifact path by default. Do not default to a tracked `docs/` path because workflow details, device identifiers, and screenshots are private.
 
 Do not silently choose a workflow or device when multiple choices exist. Do not start a real-device run until the selected workflow, device, mode, and count are clear.
 
@@ -37,6 +35,8 @@ uv run mobilerun devices
 uv run mobilerun workflow inspect <workflow-id> [--version <N>]
 uv run mobilerun workflow validate <workflow-id> [--version <N>]
 ```
+
+Resolve configuration before the device run. Use the repository-local `uv run` entry point, run from the project root or set `MOBILERUN_CONFIG`, and prefer `device.use_tcp: true` with `device.portal_mode: required` for Android state observation. If Portal is unavailable, stop as an observation/infrastructure failure instead of allowing an implicit UiAutomator fallback to influence the run.
 
 Require the selected version to be validated. Prefer an active version for normal use. If the workflow has trading, payment, messaging, deletion, account, or other side effects, confirm that the device uses a simulator/test account and that its completion check cleans up the side effect.
 
@@ -76,6 +76,8 @@ uv run mobilerun workflow run <workflow-id> \
 
 Recovery is only successful when the runner's code-side state check passes and the original workflow resumes. A model message claiming success is not evidence. Report recovery attempts, LLM calls, recovered steps, and any blocked result.
 
+Use the run's `journal.jsonl` and `repair_proposal.json` to reconstruct recovery. The journal records `recovery_start`, `recovery_prompt`, `recovery_llm`, `recovery_action`, and `recovery_state`, including the divergence context, attempted bounded actions, and state re-check. Proposals have `auto_publish: false` and require review before importing a new workflow version.
+
 ### Single run
 
 For one run, execute the selected command directly and preserve its JSON result. Report:
@@ -86,7 +88,10 @@ For one run, execute the selected command directly and preserve its JSON result.
 - recovery attempts;
 - failure reason;
 - result/journal/repair-proposal paths;
+- HTML timeline path from `uv run mobilerun workflow report <workflow-id> [--run-id <run-id>]`;
 - final completion check.
+
+The run directory also contains `manifest.json`, `artifacts/states/`, and `artifacts/screenshots/`. Keep this evidence local and out of Git. Before committing any source or generic example changes, stage them and run `python3 scripts/check_staged_privacy.py` so concrete workflows, runtime records, local paths, credentials, and device identifiers are rejected.
 
 ### Multiple runs
 
@@ -135,7 +140,7 @@ Also report `completed/requested` when the batch was interrupted. Do not call an
 
 ## Report output
 
-Write a Markdown report to the user-requested path or `docs/<workflow-id>-run-report.md`:
+Write a Markdown report to the user-requested local ignored path. Keep concrete workflow details, device identifiers, screenshots, and run evidence out of tracked documentation:
 
 ```markdown
 # <workflow> run report

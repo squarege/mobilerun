@@ -1,7 +1,6 @@
 ---
 name: mobilerun-workflow
-description: Create, record, modify, validate, publish, optimize, run, debug, and batch-run Mobilerun mobile workflows. Use this skill whenever the user mentions Mobilerun workflows, macros, trajectory recording, Android/iOS device automation, ADB device runs, workflow recovery, replay, multi-device execution, or asks to control a phone through Mobilerun—even if they only ask for a command, a configuration change, or a quick workflow fix. Prefer repository-native Mobilerun workflow commands and produce auditable run results.
-compatibility: Requires a Mobilerun repository, Python/uv, ADB for Android, and any provider/device credentials needed by the requested run. Never expose API keys, setup tokens, passwords, or secret values in logs or workflow files.
+description: Create, record, modify, validate, publish, optimize, run, debug, and batch-run Mobilerun mobile workflows. Use this skill whenever the user mentions Mobilerun workflows, macros, trajectory recording, Android/iOS device automation, ADB device runs, workflow recovery, replay, multi-device execution, or asks to control a phone through Mobilerun—even if they only ask for a command, a configuration change, or a quick workflow fix. Prefer repository-native Mobilerun workflow commands and produce auditable run results. Requires a Mobilerun repository, Python/uv, ADB for Android, and any provider/device credentials needed by the requested run. Never expose API keys, setup tokens, passwords, or secret values in logs or workflow files.
 ---
 
 # Mobilerun Workflow Operator
@@ -22,6 +21,8 @@ Before changing files or starting a device run:
    - `uv run mobilerun ...` when `pyproject.toml` and `uv.lock` are present;
    - otherwise the repository's documented virtualenv command.
    Do not silently use a globally installed Mobilerun version when the repository has a newer checkout. Compare `mobilerun --version` and `uv run mobilerun --version` if version drift could affect config or schema.
+   Configuration is resolved in this order: an explicit `--config` value, `MOBILERUN_CONFIG`, `config.yaml` in the current project directory, then the user config. Run project commands from the repository root or set `MOBILERUN_CONFIG` explicitly so the modified checkout does not inherit an unrelated global file.
+   For Android runs that depend on reliable state observation, use `device.use_tcp: true` and `device.portal_mode: required` in the selected config. If Portal cannot provide state, stop and classify the run as an observation/infrastructure failure. Do not silently accept a UiAutomator fallback when visual or accessibility evidence is required.
 3. Discover devices before selecting one:
    ```bash
    adb devices
@@ -30,6 +31,7 @@ Before changing files or starting a device run:
    Pass an explicit serial with `--device` for every real run. Mobilerun's normal single-run path does not select one device when several are online.
 4. Establish safety boundaries. Confirm the target app, device, environment, success condition, and whether actions have side effects. For payments, trading, deletion, messaging, account changes, or production data, require explicit confirmation immediately before the irreversible action. Prefer a simulator, test account, dry-run, or `--on-divergence stop`.
 5. Keep credentials outside source, prompts, macro JSON, logs, screenshots, and reports. Use Mobilerun's credential manager and `type_secret`/`secret_id` actions where applicable. Redact keys in command output and summaries.
+6. Keep concrete workflows, run IDs, device-specific traces, screenshots, state dumps, and credentials local. The repository pre-commit hook runs `scripts/check_staged_privacy.py`; stage only generic examples and source changes, then run that check before committing.
 
 ## 2. Choose the right operation
 
@@ -158,6 +160,14 @@ uv run mobilerun workflow runs <workflow-id>
 
 For each run, report the workflow/version, device serial, status, completed/total steps, failure reason, journal path, and any repair proposal. Read `result.json` and `journal.jsonl` instead of inferring success from console text.
 
+Each run also writes a local evidence bundle under `workflows/<workflow-id>/runs/<run-id>/` with `manifest.json`, `result.json`, `journal.jsonl`, state snapshots in `artifacts/states/`, screenshots in `artifacts/screenshots/`, and, when recovery diverges, `repair_proposal.json`. Generate the reviewable timeline with:
+
+```bash
+uv run mobilerun workflow report <workflow-id> [--run-id <run-id>]
+```
+
+The journal records `recovery_start`, `recovery_prompt`, `recovery_llm`, `recovery_action`, and `recovery_state` events. Use those records and the HTML report to explain what context the recovery agent received, which bounded action it tried, whether the failed precondition was re-observed, and why execution resumed or stopped. A repair proposal is a candidate for review only. Import it into a new version and validate it before activation. Never commit the evidence bundle or a report containing a concrete workflow.
+
 ## 6. Multi-device execution
 
 A single Mobilerun agent is single-device. ADB may expose many devices, but the standard CLI requires an explicit `--device` and has no built-in device-pool scheduler.
@@ -186,6 +196,7 @@ Classify the failure before changing the workflow:
 
 - **Wrong executable/version**: compare `mobilerun --version` and `uv run mobilerun --version`; use `uv run` for the checkout.
 - **Wrong config**: print the resolved config path and use `--config` or `MOBILERUN_CONFIG`; never mix old global config with a newer schema.
+- **Portal/UiAutomator fallback**: inspect the selected config for `use_tcp: true` and `portal_mode: required`, then run the repository's device/Portal diagnostics. Treat missing Portal state as an observation/infrastructure failure rather than a model reasoning failure.
 - **Device selection**: run `adb devices`; pass `--device <serial>`; check the device is `device`, not `offline` or `unauthorized`.
 - **UI divergence**: inspect the last journal state, package/activity, selector evidence, and screenshot; prefer a new recorded version over blind coordinate changes.
 - **Unknown outcome after a side effect**: stop. Do not automatically retry. Inspect the app and account state first.

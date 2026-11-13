@@ -1,7 +1,6 @@
 ---
 name: mobilerun-workflow-stabilizer
-description: Build a stable Mobilerun workflow from repeated AI exploration. Use this skill whenever the user asks to create/fix a mobile workflow by having AI run the task several times, learn from failures, consolidate a trajectory into a versioned workflow, run it repeatedly (especially 5 or 10 times), measure pass rate, or produce an execution report. It covers Android/iOS Mobilerun runs, macro/trajectory promotion, recovery validation, workflow versioning, batch execution, and auditable reports.
-compatibility: Requires a Mobilerun repository, uv/Python, an explicit ADB or supported device serial, configured model credentials for exploration/recovery, and the repository-native workflow CLI.
+description: Build a stable Mobilerun workflow from repeated AI exploration. Use this skill whenever the user asks to create/fix a mobile workflow by having AI run the task several times, learn from failures, consolidate a trajectory into a versioned workflow, run it repeatedly (especially 5 or 10 times), measure pass rate, or produce an execution report. It covers Android/iOS Mobilerun runs, macro/trajectory promotion, recovery validation, workflow versioning, batch execution, and auditable reports. Requires a Mobilerun repository, uv/Python, an explicit device serial, configured model credentials, and the repository-native workflow CLI.
 ---
 
 # Mobilerun Workflow Stabilizer
@@ -51,6 +50,8 @@ Before touching the phone, identify:
 - exact completion evidence, not just the last action;
 - requested exploration count and final batch count.
 
+Use the repository-local `uv run` entry point. Configuration resolves from an explicit `--config`, `MOBILERUN_CONFIG`, project `config.yaml`, then the user config. For Android state observation, prefer `device.use_tcp: true` and `device.portal_mode: required`. A Portal read failure should stop as an observation/infrastructure issue instead of silently falling back to UiAutomator and producing misleading trajectory evidence.
+
 For trading, payment, messaging, deletion, account changes, or production data, require a simulator/test account and confirm the irreversible boundary. A simulated order is still a stateful side effect: verify it is cancelled/cleaned up after every run.
 
 Never put API keys, passwords, tokens, or secret values into prompts, workflow JSON, screenshots, logs, or reports. Use `secret_id`/credential manager actions.
@@ -75,6 +76,8 @@ For each attempt, record:
 - model/provider used and model call count if available;
 - exact failure step and visible device state;
 - whether side effects were cleaned up.
+
+Keep these trajectories, screenshots, state snapshots, and run records in the local ignored run directory. They are debugging evidence and may contain concrete workflow details, device identifiers, or private UI content.
 
 Use a fresh app/device state between attempts when the task is stateful. Do not let a leftover order, modal, login, or selected tab make a later attempt appear successful.
 
@@ -199,6 +202,8 @@ Recovery is successful only when:
 
 A model response saying “done” is not recovery evidence. If the UI remains wrong, classify the run as `BLOCKED`/`FAILED` and preserve the journal.
 
+Every workflow run keeps `manifest.json`, `result.json`, `journal.jsonl`, `artifacts/states/`, and `artifacts/screenshots/` under its run directory. Recovery events are recorded as `recovery_start`, `recovery_prompt`, `recovery_llm`, `recovery_action`, and `recovery_state`. When divergence occurs, `repair_proposal.json` captures the bounded recovery context and candidate actions with `auto_publish: false`. Use `uv run mobilerun workflow report <workflow-id> [--run-id <run-id>]` to review the timeline. Treat the proposal as input to a reviewed new version, never as an automatic workflow mutation.
+
 ## 7. Run the final batch, normally 10 times
 
 Run sequentially on one device unless the user explicitly requests a device pool. Each run must have an isolated result/journal path and a clean test state.
@@ -231,10 +236,12 @@ Use the bundled aggregator for a concise report:
 python <skill-path>/scripts/aggregate_runs.py \
   --workflow-root workflows/<workflow-id> \
   --limit 10 \
-  --output docs/<workflow-id>-batch-report.md
+  --output <local-ignored-report-path>
 ```
 
 The aggregator is for run-result evidence; it does not replace device cleanup or human review.
+
+Keep the generated report and all run artifacts out of tracked documentation. Before committing source or generic example changes, stage them and run `python3 scripts/check_staged_privacy.py`. The gate rejects concrete workflows, runtime records, local absolute paths, credentials, and device-specific identifiers while allowing example/fixture paths.
 
 ## 8. Report format
 
