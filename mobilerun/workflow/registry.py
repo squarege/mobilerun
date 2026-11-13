@@ -234,7 +234,7 @@ class WorkflowRegistry:
         macro["actions"] = self.render_actions(macro.get("actions", []), params)
 
         workflow_dir = self._workflow_dir(workflow_id)
-        run_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        run_id = f"{time.strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}"
         run_dir = workflow_dir / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
         started_at = time.time()

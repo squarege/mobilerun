@@ -49,7 +49,7 @@ class Trajectory:
 
     def _create_trajectory_folder(self):
         """Create unique trajectory folder with timestamp and UUID."""
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
         unique_id = str(uuid.uuid4())[:8]
         folder = self.base_path / f"{timestamp}_{unique_id}"
         folder.mkdir(parents=True, exist_ok=True)
@@ -366,7 +366,7 @@ Trajectory.print_macro_summary(folder_path)
 
 # Example folder structure created:
 # trajectories/
-# └── trajectory_20250108_143052/
+# └── trajectory_2025-01-08_14-30-52/
 #     ├── trajectory.json      # Full trajectory events
 #     ├── macro.json          # Macro sequence with goal as description
 #     └── screenshots.gif     # Screenshot animation
