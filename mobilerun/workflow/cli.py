@@ -9,6 +9,7 @@ from typing import Optional
 
 import click
 
+from mobilerun.workflow.anomalies import AnomalyManager
 from mobilerun.workflow.registry import WorkflowRegistry
 
 
@@ -148,3 +149,58 @@ def report_workflow(ctx, workflow_id: str, run_id: Optional[str], output: Option
     """Generate an HTML timeline for a workflow run."""
     report = ctx.obj["registry"].report(workflow_id, run_id=run_id, output=output)
     click.echo(str(report))
+
+
+@workflow_cli.command("scan")
+@click.option("--workflow", "workflow_id", default=None, help="Limit the scan to one workflow.")
+@click.option("--version", type=int, default=None, help="Limit the scan to one workflow version.")
+@click.option("--run-id", default=None, help="Limit the scan to one run.")
+@click.option("--since", default=None, help="Only scan runs started at or after an ISO timestamp.")
+@click.option("--status", type=click.Choice(["open", "triaged", "repair_planned", "repair_activated", "repaired", "dismissed", "false_positive"]), default=None, help="When listing, show only this status.")
+@click.option("--list-only", is_flag=True, help="Show the persisted anomaly index without scanning again.")
+@click.option("--set-status", "status_updates", multiple=True, help="Set anomaly status as anomaly-id=status.")
+@click.pass_context
+def scan_workflow(ctx, workflow_id, version, run_id, since, status, list_only, status_updates):
+    """Scan local workflow run evidence for anomalies."""
+    manager = AnomalyManager(ctx.obj["registry"].root)
+    if list_only:
+        anomalies = manager.list_anomalies(status)
+        click.echo(json.dumps({"anomaly_count": len(anomalies), "anomalies": anomalies}, ensure_ascii=False, indent=2))
+        return
+    result = manager.scan(
+        workflow_id=workflow_id,
+        version=version,
+        run_id=run_id,
+        since=since,
+        set_status=list(status_updates),
+    )
+    click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+@workflow_cli.command("repair")
+@click.argument("anomaly_id")
+@click.option("--ai", is_flag=True, help="Run AI triage; static evidence triage is used otherwise.")
+@click.option("--provider", default=None, help="Explicit AI provider; requires --model.")
+@click.option("--model", default=None, help="Explicit AI model; requires --provider.")
+@click.option("--config", "config_path", default=None, help="Configuration used when loading the default AI profile.")
+@click.option("--with-screenshots", is_flag=True, help="Send one locally referenced screenshot to the AI triage model.")
+@click.option("--create-draft", is_flag=True, help="Apply the reviewed plan to a new draft version.")
+@click.pass_context
+def repair_workflow(ctx, anomaly_id, ai, provider, model, config_path, with_screenshots, create_draft):
+    """Triage an anomaly and optionally create a reviewable repair draft."""
+    manager = AnomalyManager(ctx.obj["registry"].root)
+    plan = manager.repair(
+        anomaly_id,
+        ai=ai,
+        provider=provider,
+        model=model,
+        config_path=config_path,
+        with_screenshots=with_screenshots,
+    )
+    response: dict = {"plan": plan}
+    if create_draft:
+        if plan["status"] != "pending_review":
+            raise click.ClickException("a pending_review repair plan is required before creating a draft")
+        applied = manager.apply_plan(plan["plan_id"], ctx.obj["registry"])
+        response = applied
+    click.echo(json.dumps(response, ensure_ascii=False, indent=2))

@@ -6,6 +6,7 @@ __pycache__/
 *$py.class
 trajectories/
 logs/
+runs/
 workflows/**/runs/
 *.class
 

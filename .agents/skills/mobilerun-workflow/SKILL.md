@@ -45,6 +45,8 @@ Before changing files or starting a device run:
 | Publish a version | `mobilerun workflow activate` |
 | Execute a published workflow | `mobilerun workflow run` |
 | Diagnose a run | inspect `result.json`, `journal.jsonl`, `repair_proposal.json`, and `workflow runs` |
+| Find recurring execution anomalies | `mobilerun workflow scan` |
+| Prepare a reviewed repair | `mobilerun workflow repair <anomaly-id>` |
 | Repeat across devices | launch one isolated process per serial with bounded concurrency and per-device logs; do not pretend one Mobilerun run controls a device pool |
 
 If the user asks to “modify the workflow,” do not edit the active version in place. Create or import a new version, validate it, compare the diff, and activate only after review.
@@ -205,7 +207,28 @@ Classify the failure before changing the workflow:
 
 When changing implementation code, use a failing regression test at the parser, replay, registry, or CLI seam that reproduces the exact symptom. Run targeted tests first, then the full suite.
 
-## 8. Expected response format
+## 8. Anomaly scan and repair
+
+Use the repository-local scanner before proposing workflow changes:
+
+```bash
+uv run mobilerun workflow scan
+uv run mobilerun workflow scan --workflow <workflow-id> [--version <N>] [--run-id <run-id>]
+```
+
+Report a concise table: anomaly ID, workflow/version/run, failed step, type, severity, status, evidence path, and suggested next action. Do not paste raw journals, UI dumps, screenshots, or concrete workflow details into the conversation. Scan and triage products stay in the local ignored `runs/scans/` directory and must never be committed.
+
+For repair planning, use static triage first:
+
+```bash
+uv run mobilerun workflow repair <anomaly-id>
+```
+
+Ask for explicit user approval before `--ai`, and ask again before `--create-draft`. With screenshots, use `--with-screenshots` only when the user approves sending local UI evidence to the configured model. A repair plan may only insert a wait, back, or unique-selector tap, replace a coordinate tap with a unique selector, or set a package/selector completion check. Never raise budgets, weaken pre-state guards, retry unknown side effects, or invent coordinates.
+
+`--create-draft` creates the next immutable draft version; it does not activate it. Run `workflow validate`, show the changed step and completion check, and let the user explicitly activate and replay on an approved device. Mark the anomaly repaired only after a subsequent `MACRO_SUCCESS` proves the failed step no longer diverges.
+
+## 9. Expected response format
 
 For operational requests, respond with:
 

@@ -200,6 +200,64 @@ class WorkflowRegistry:
         temporary.replace(active_path)
         return metadata
 
+    def create_repaired_draft(
+        self,
+        workflow_id: str,
+        *,
+        source_version: int,
+        operations: list[Dict[str, Any]],
+        provenance: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Create the next immutable draft by applying reviewed repair operations."""
+        source = self.inspect(workflow_id, source_version)
+        macro = self._read_json(Path(source["macro_path"]))
+        actions = macro.get("actions", [])
+        metadata = {key: value for key, value in source.items() if key != "macro_path"}
+
+        ordered_operations = sorted(
+            operations,
+            key=lambda operation: int(operation["step_index"]),
+            reverse=True,
+        )
+        for operation in ordered_operations:
+            step_index = int(operation["step_index"])
+            if step_index < 0 or step_index >= len(actions):
+                raise ValueError(f"repair step index is out of range: {step_index}")
+            kind = operation.get("op")
+            if kind == "insert_action":
+                actions.insert(step_index, operation["action"])
+            elif kind == "replace_tap_with_selector":
+                if actions[step_index].get("action_type") != "tap":
+                    raise ValueError(f"step {step_index} is not a coordinate tap")
+                replaced = dict(actions[step_index])
+                replaced.pop("x", None)
+                replaced.pop("y", None)
+                replaced["action_type"] = "tap_selector"
+                replaced["selector"] = operation["selector"]
+                actions[step_index] = replaced
+            elif kind == "set_completion_check":
+                metadata["completion_check"] = operation["completion_check"]
+            else:
+                raise ValueError(f"unsupported repair operation: {kind!r}")
+
+        macro["actions"] = actions
+        workflow_dir = self._workflow_dir(workflow_id)
+        target_version = self._next_version(workflow_dir)
+        version_dir = workflow_dir / "versions" / f"{target_version:04d}"
+        version_dir.mkdir(parents=True, exist_ok=False)
+        metadata.update(
+            {
+                "status": "draft",
+                "version": target_version,
+                "created_at": time.time(),
+                "repair_provenance": provenance,
+            }
+        )
+        self._write_json(version_dir / "macro.json", macro)
+        self._write_json(version_dir / "workflow.json", metadata)
+        metadata["macro_path"] = str(version_dir / "macro.json")
+        return metadata
+
     async def run(
         self,
         workflow_id: str,
