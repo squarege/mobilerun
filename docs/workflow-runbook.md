@@ -100,7 +100,7 @@ mobilerun workflow scan --workflow order-search --version 3
 
 扫描结果保存在本地忽略的 `runs/scans/` 目录中，包含 `index.jsonl`、`state.json`、每次扫描的 JSON/Markdown 摘要以及修复计划。异常有稳定 ID 和状态生命周期，可用于过滤和追溯。
 
-扫描会把重复失败模式派生为 `lessons.json`。`workflow run` 结束后会自动刷新一次，不需要单独记住扫描命令。lesson 记录失败模式、涉及 run、候选修复操作、置信度、重现次数和过期时间；修复在目标版本验证通过后标记 `verified`，同一模式重现会回到 `active`，30 天没有新证据则过期。verified 操作会作为 static/AI 修复上下文，但仍必须经过现有 draft、validate、activate 和重放验证流程。
+扫描会把重复失败模式派生为 `lessons.json`。`workflow run` 结束后会自动刷新一次，不需要单独记住扫描命令。lesson 记录失败模式、涉及 run、候选修复操作、置信度、权重、验证/重试次数和重现次数；修复在目标版本验证通过后标记 `verified`，同一模式重现会回到 `active`，久未使用或多次未解决问题只降低权重并归入 `secondary`，不会被删除。修复先读取 `primary` lessons；第一轮 static/AI 没有给出安全方案时，才检索 `secondary` lessons。verified 操作会作为修复上下文，但仍必须经过现有 draft、validate、activate 和重放验证流程。
 
 先使用静态证据分诊；只有明确需要模型判断时才启用 AI：
 

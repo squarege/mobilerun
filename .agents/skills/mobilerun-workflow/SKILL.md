@@ -219,7 +219,7 @@ uv run mobilerun workflow scan --workflow <workflow-id> [--version <N>] [--run-i
 
 Report a concise table: anomaly ID, workflow/version/run, failed step, type, severity, status, evidence path, and suggested next action. Do not paste raw journals, UI dumps, screenshots, or concrete workflow details into the conversation. Scan and triage products stay in the local ignored `runs/scans/` directory and must never be committed.
 
-The scanner also derives local `lessons.json` from repeated failure patterns. A `workflow run` refreshes lessons automatically; they become `verified` only after a repaired target version passes replay, return to `active` on recurrence, and expire after 30 days without evidence. Verified operations inform later static or AI triage, but they never bypass draft creation, validation, explicit activation, and replay verification.
+The scanner also derives local `lessons.json` from repeated failure patterns. A `workflow run` refreshes lessons automatically; they become `verified` only after a repaired target version passes replay, return to `active` on recurrence, and lose weight when stale or repeatedly unsolved. Weight selects `primary` versus `secondary`; the repair path consults secondary lessons only after primary lessons produce no safe plan. Lessons are retained, and proven operations never bypass draft creation, validation, explicit activation, and replay verification.
 
 For repair planning, use static triage first:
 

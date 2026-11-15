@@ -3,7 +3,6 @@ import time
 
 import pytest
 
-import mobilerun.workflow.anomalies as anomaly_module
 from mobilerun.workflow.anomalies import AnomalyError, AnomalyManager
 from mobilerun.workflow.registry import WorkflowRegistry
 
@@ -178,7 +177,7 @@ def test_repair_rejects_unsafe_operation(tmp_path):
         )
 
 
-def test_lessons_refresh_verify_reuse_and_expire(tmp_path, monkeypatch):
+def test_lessons_verify_reuse_and_reveal_secondary(tmp_path):
     root = tmp_path
     registry = _write_workflow(root)
     _write_run(root, "run-1")
@@ -226,9 +225,24 @@ def test_lessons_refresh_verify_reuse_and_expire(tmp_path, monkeypatch):
     assert static["operations"] == verified_lesson["recommended_operations"]
     assert static["lesson_ids"] == [verified_lesson["lesson_id"]]
 
-    monkeypatch.setattr(anomaly_module, "_LESSON_TTL_SECONDS", 0)
-    expired_scan = manager.scan()
-    assert expired_scan["active_lesson_count"] == 0
-    assert manager.list_lessons("expired")
+    manager.update_status(divergence["anomaly_id"], "false_positive")
+    dismissed = manager.list_lessons("dismissed")
+    assert dismissed and dismissed[0]["tier"] == "secondary"
+    assert "expires_at" not in dismissed[0]
+    assert dismissed[0]["weight"] < verified_lesson["weight"]
+    assert all(lesson["status"] != "expired" for lesson in manager.list_lessons())
+
+    secondary = manager.repair(divergence["anomaly_id"])
+    assert secondary["triage"]["lesson_disclosure"] == "secondary"
+    assert secondary["operations"] == verified_lesson["recommended_operations"]
+    assert secondary["secondary_lesson_ids"] == [dismissed[0]["lesson_id"]]
+
+    state = manager._load_state()
+    for lesson in state["lessons"].values():
+        lesson["last_seen"] = time.time() - 40 * 24 * 60 * 60
+    manager._write_state(state)
+    manager._refresh_lessons({})
+    dormant = manager.list_lessons("dormant")
+    assert dormant and verified_lesson["lesson_id"] in {lesson["lesson_id"] for lesson in dormant}
 
     assert (root / "runs" / "scans" / "lessons.json").exists()

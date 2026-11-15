@@ -204,7 +204,7 @@ A model response saying “done” is not recovery evidence. If the UI remains w
 
 Every workflow run keeps `manifest.json`, `result.json`, `journal.jsonl`, `artifacts/states/`, and `artifacts/screenshots/` under its run directory. Recovery events are recorded as `recovery_start`, `recovery_prompt`, `recovery_llm`, `recovery_action`, and `recovery_state`. When divergence occurs, `repair_proposal.json` captures the bounded recovery context and candidate actions with `auto_publish: false`. Use `uv run mobilerun workflow report <workflow-id> [--run-id <run-id>]` to review the timeline. Treat the proposal as input to a reviewed new version, never as an automatic workflow mutation.
 
-Each run automatically refreshes local `runs/scans/lessons.json` so repeated patterns, verified repair operations, regressions, and 30-day stale lessons remain auditable across stabilization batches. Use lessons to select the next candidate, then keep version creation, validation, activation, and replay approval explicit.
+Each run automatically refreshes local `runs/scans/lessons.json` so repeated patterns, weighted evidence, verified repair operations, regressions, and dormant lessons remain auditable across stabilization batches. Repair uses primary lessons first and reveals secondary lessons only when the primary pass does not solve the failure. Keep version creation, validation, activation, and replay approval explicit.
 
 ## 7. Run the final batch, normally 10 times
 
