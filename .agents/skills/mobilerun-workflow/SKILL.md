@@ -46,6 +46,7 @@ Before changing files or starting a device run:
 | Execute a published workflow | `mobilerun workflow run` |
 | Diagnose a run | inspect `result.json`, `journal.jsonl`, `repair_proposal.json`, and `workflow runs` |
 | Find recurring execution anomalies | `mobilerun workflow scan` |
+| Reuse proven fixes across runs | inspect `runs/scans/lessons.json` after a run or scan |
 | Prepare a reviewed repair | `mobilerun workflow repair <anomaly-id>` |
 | Repeat across devices | launch one isolated process per serial with bounded concurrency and per-device logs; do not pretend one Mobilerun run controls a device pool |
 
@@ -217,6 +218,8 @@ uv run mobilerun workflow scan --workflow <workflow-id> [--version <N>] [--run-i
 ```
 
 Report a concise table: anomaly ID, workflow/version/run, failed step, type, severity, status, evidence path, and suggested next action. Do not paste raw journals, UI dumps, screenshots, or concrete workflow details into the conversation. Scan and triage products stay in the local ignored `runs/scans/` directory and must never be committed.
+
+The scanner also derives local `lessons.json` from repeated failure patterns. A `workflow run` refreshes lessons automatically; they become `verified` only after a repaired target version passes replay, return to `active` on recurrence, and expire after 30 days without evidence. Verified operations inform later static or AI triage, but they never bypass draft creation, validation, explicit activation, and replay verification.
 
 For repair planning, use static triage first:
 

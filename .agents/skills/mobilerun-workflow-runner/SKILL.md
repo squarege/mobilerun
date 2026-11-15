@@ -78,6 +78,8 @@ Recovery is only successful when the runner's code-side state check passes and t
 
 Use the run's `journal.jsonl` and `repair_proposal.json` to reconstruct recovery. The journal records `recovery_start`, `recovery_prompt`, `recovery_llm`, `recovery_action`, and `recovery_state`, including the divergence context, attempted bounded actions, and state re-check. Proposals have `auto_publish: false` and require review before importing a new workflow version.
 
+A completed run also refreshes local `runs/scans/lessons.json`; `result.details` exposes the lesson scan id and active lesson count. Treat lessons as durable failure evidence, not as permission to change a workflow automatically.
+
 ### Single run
 
 For one run, execute the selected command directly and preserve its JSON result. Report:
