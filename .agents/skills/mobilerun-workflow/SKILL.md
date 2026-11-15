@@ -121,6 +121,12 @@ Prefer, in order:
 
 Never remove `pre_state` just to make validation pass. Never replace a secret with its literal value. Never make recovery replay a side-effecting action unless the outcome is known to be safe.
 
+For financial inspection, use auditable code-side actions instead of asking a model to reason from pixels. Use `verify_money_sum` when several visible amounts must reconcile; give each source and the target a point inside the smallest text node, and keep tolerance limited to display rounding. The replay writes a `money_verification` journal event with source text/values, target, calculated sum, difference, tolerance, and pass/fail.
+
+For cancelling a current order, use `cancel_active_order` with a unique history-section header and a content-top selector that bounds the active-order section. It refuses zero or multiple active candidates and never clicks below the history boundary. Do not replace this guard with a recorded history-section tap.
+
+For workflows with order, payment, message, deletion, or account side effects: submit at most once, keep `allow_side_effect_retry: false`, use `--on-divergence stop`, capture before/after evidence, validate the version in the real business window, and activate only after explicit review. Keep one account/workflow/device mapping.
+
 After editing or importing a new version:
 
 ```bash

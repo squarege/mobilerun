@@ -40,6 +40,8 @@ Resolve configuration before the device run. Use the repository-local `uv run` e
 
 Require the selected version to be validated. Prefer an active version for normal use. If the workflow has trading, payment, messaging, deletion, account, or other side effects, confirm that the device uses a simulator/test account and that its completion check cleans up the side effect.
 
+For trading inspection, treat an order submission as one-shot. Confirm that the workflow records pre-order evidence, keeps side-effect retry disabled, stops on divergence, and captures the delegate status, cancellation, and before/after funds checks. Do not run an unvalidated draft against a real account; a version with an irreversible side effect needs real-window validation and explicit activation first.
+
 Use an explicit device on every run:
 
 ```bash
@@ -62,6 +64,8 @@ uv run mobilerun workflow run <workflow-id> \
 ```
 
 Interpretation: any divergence stops the run. This mode should normally produce `llm_calls: 0`.
+
+For trading inspection, also read `money_verification` and `cancel_target` events. A pass means code-side reconciliation succeeded or the cancellation target was uniquely bounded; do not infer it from a model message. If either action fails or the run blocks after an order submission, inspect account state before any manual retry.
 
 ### AI/local recovery allowed
 
