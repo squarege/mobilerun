@@ -8,6 +8,7 @@ that were generated during MobileAgent trajectory recording.
 import asyncio
 import json
 import logging
+import re
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -578,6 +579,82 @@ class MacroPlayer:
                 logger.info("✅ verify_nodes_text_equal: %r", source_text)
                 return True
 
+            elif action_type == "verify_money_sum":
+                # Code-side arithmetic check for visible money cells. Points
+                # identify the smallest text node containing each amount; this
+                # avoids depending on a model's numeric reasoning.
+                state = current_state or await self.get_current_state_snapshot()
+                source_values = []
+                source_details = []
+                for source in action.get("sources", []):
+                    node = self._money_node_at_point(state, source)
+                    if node is None:
+                        raise ValueError(f"money source point matched no text node: {source}")
+                    value = self._parse_money(str(node.get("text") or ""))
+                    source_values.append(value)
+                    source_details.append(
+                        {
+                            "label": source.get("label"),
+                            "point": {"x": source.get("x"), "y": source.get("y")},
+                            "text": node.get("text"),
+                            "value": value,
+                        }
+                    )
+                target_node = self._money_node_at_point(state, action.get("target") or {})
+                if target_node is None:
+                    raise ValueError("money target point matched no text node")
+                target_text = str(target_node.get("text") or "")
+                target_value = self._parse_money(target_text)
+                tolerance = max(0.0, float(action.get("tolerance", 0.01)))
+                calculated = sum(source_values)
+                difference = calculated - target_value
+                verified = abs(difference) <= tolerance
+                evidence = {
+                    "sources": source_details,
+                    "target_text": target_text,
+                    "target_value": target_value,
+                    "calculated_value": calculated,
+                    "difference": difference,
+                    "tolerance": tolerance,
+                    "verified": verified,
+                }
+                self.journal.append(
+                    "money_verification",
+                    label=action.get("label", "money sum"),
+                    **evidence,
+                )
+                if not verified:
+                    logger.error(
+                        "❌ money sum mismatch: %s vs %s (difference %s)",
+                        calculated,
+                        target_value,
+                        difference,
+                    )
+                    return False
+                logger.info("✅ money sum verified: %s", calculated)
+                return True
+
+            elif action_type == "cancel_active_order":
+                # Only cancel in the active section. A history header bounds the
+                # search; multiple or zero current orders are refused rather
+                # than guessed from lookalike history controls.
+                state = current_state or await self.get_current_state_snapshot()
+                target = self._active_cancel_target(state, action)
+                if target is None:
+                    raise ValueError("active order was not uniquely identifiable")
+                bounds = target["bounds"]
+                self.journal.append(
+                    "cancel_target",
+                    label=action.get("label", "active order"),
+                    text=target.get("text"),
+                    bounds=bounds,
+                )
+                result = await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
+                if result is False:
+                    return False
+                await asyncio.sleep(float(action.get("settle_seconds", 1.0)))
+                return True
+
             elif action_type == "type_secret":
                 secret_id = action.get("secret_id")
                 clear = action.get("clear", False)
@@ -951,6 +1028,7 @@ class MacroPlayer:
             return True
         action_type = action.get("action_type", action.get("type", ""))
         return action_type in {
+            "cancel_active_order",
             "send",
             "submit",
             "purchase",
@@ -959,6 +1037,86 @@ class MacroPlayer:
             "authorize",
             "confirm",
         }
+
+    @staticmethod
+    def _bounds_top(bounds: Any) -> Optional[int]:
+        if not isinstance(bounds, dict):
+            return None
+        try:
+            return int(bounds["top"])
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _active_cancel_target(cls, state: Dict[str, Any], action: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        nodes = state.get("nodes", [])
+        history_text = str(action.get("history_header_text") or "其他")
+        history_nodes = [node for node in nodes if str(node.get("text") or "") == history_text]
+        if len(history_nodes) != 1:
+            return None
+        history_top = cls._bounds_top(history_nodes[0].get("bounds"))
+        if history_top is None:
+            return None
+        top_selector = action.get("content_top_selector") or {"text": "状态"}
+        top_nodes = [
+            node
+            for node in nodes
+            if all(node.get(key) == value for key, value in top_selector.items())
+        ]
+        if len(top_nodes) != 1:
+            return None
+        top_header = top_nodes[0].get("bounds") or {}
+        try:
+            content_top = int(top_header["bottom"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        allowed_texts = set(
+            action.get("allowed_cancel_texts")
+            or ["买入全部撤单", "卖出全部撤单", "买入撤单", "卖出撤单"]
+        )
+        candidates = []
+        for node in nodes:
+            if str(node.get("text") or "") not in allowed_texts:
+                continue
+            top = cls._bounds_top(node.get("bounds"))
+            if top is None or not content_top <= top < history_top:
+                continue
+            candidates.append(node)
+        return candidates[0] if len(candidates) == 1 else None
+
+    @staticmethod
+    def _money_node_at_point(state: Dict[str, Any], point: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            x = int(point.get("x"))
+            y = int(point.get("y"))
+        except (TypeError, ValueError):
+            return None
+        selected = None
+        selected_area = None
+        for node in state.get("nodes", []):
+            bounds = node.get("bounds") or {}
+            try:
+                inside = (
+                    bounds["left"] <= x <= bounds["right"]
+                    and bounds["top"] <= y <= bounds["bottom"]
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not inside or not str(node.get("text") or "").strip():
+                continue
+            area = (bounds["right"] - bounds["left"]) * (bounds["bottom"] - bounds["top"])
+            if selected is None or area < selected_area:
+                selected = node
+                selected_area = area
+        return selected
+
+    @staticmethod
+    def _parse_money(text: str) -> float:
+        cleaned = re.sub(r"[,_元\s]", "", text)
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", cleaned)
+        if not match:
+            raise ValueError(f"no money amount in {text!r}")
+        return float(match.group(0))
 
     @staticmethod
     def _failed_result(

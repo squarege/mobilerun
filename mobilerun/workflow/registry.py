@@ -27,6 +27,8 @@ _ALLOWED_ACTIONS = {
     "input_text",
     "input_node_text",
     "verify_nodes_text_equal",
+    "verify_money_sum",
+    "cancel_active_order",
     "type_secret",
     "key_press",
     "button_press",
@@ -173,6 +175,8 @@ class WorkflowRegistry:
                 warnings.append(f"step {index}: pre_state contains no matchable evidence")
             if action_type == "type_secret" and not action.get("secret_id"):
                 errors.append(f"step {index}: type_secret requires secret_id")
+            if action_type == "cancel_active_order" and not action.get("history_header_text"):
+                errors.append(f"step {index}: cancel_active_order requires history_header_text")
             if action_type == "input_text" and "text" not in action:
                 warnings.append(f"step {index}: input_text contains a fixed value")
 
