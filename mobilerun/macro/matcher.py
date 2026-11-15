@@ -37,7 +37,11 @@ def compare_states(
     if not saved_keys and not current_keys and not saved_phone and not current_phone:
         return StateMatchResult(False, 0.0, "state contains no matchable evidence")
 
-    if saved_keys or current_keys:
+    if not saved_keys and not saved_state.get("nodes"):
+        # A phone-only guard intentionally checks the app context while
+        # allowing the page's volatile accessibility tree to vary.
+        node_score = 1.0
+    elif saved_keys or current_keys:
         intersection = len(saved_keys & current_keys)
         union = len(saved_keys | current_keys)
         node_score = intersection / union if union else 1.0

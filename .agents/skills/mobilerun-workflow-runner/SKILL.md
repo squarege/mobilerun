@@ -201,3 +201,19 @@ Before responding:
 - [ ] strict and supervised rates are separate;
 - [ ] report path is provided;
 - [ ] remaining risks and next steps are stated.
+
+## Broker inspection runs
+
+For a generic multi-broker inspection, use the local profile entry point so the workflow ID stays broker-neutral:
+
+```bash
+uv run mobilerun workflow broker-run \
+  --workflow broker-daily-inspection \
+  --broker <profile-id> \
+  --version <N> \
+  --device <serial> \
+  --confirm-side-effect \
+  --on-divergence stop
+```
+
+The profile supplies the display name, credential reference, expected pending/cancelled statuses, and current-order boundary. The run records broker session selection, code-side funds checks, pending status, cancellation target, and cancelled status. After multiple broker runs, use `workflow audit-report` with one `--run workflow-id:run-id` per run to produce the compact summary table.

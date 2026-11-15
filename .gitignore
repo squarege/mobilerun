@@ -51,3 +51,4 @@ reddit_python_posts.json
 test/
 # agent-test-flows generated run reports
 agent-test-flows/reports/
+config/broker_profiles.yaml

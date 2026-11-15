@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Optional
 
 import click
+import yaml
 
 from mobilerun.workflow.anomalies import AnomalyManager
+from mobilerun.workflow.audit_report import collect_audit_rows, generate_audit_report
 from mobilerun.workflow.registry import WorkflowRegistry
 
 
@@ -153,6 +155,49 @@ def run_workflow(
         raise click.exceptions.Exit(1)
 
 
+@workflow_cli.command("broker-run")
+@click.option("--workflow", "workflow_id", default="broker-daily-inspection", show_default=True)
+@click.option("--broker", "broker_id", required=True, help="Local broker profile id.")
+@click.option("--profile", "profile_path", type=click.Path(exists=True, path_type=Path), default="config/broker_profiles.yaml", show_default=True)
+@click.option("--version", type=int, default=None)
+@click.option("--device", required=True)
+@click.option("--on-divergence", type=click.Choice(["stop", "recover"]), default="stop", show_default=True)
+@click.option("--allow-draft", is_flag=True)
+@click.option("--confirm-side-effect", is_flag=True, help="Acknowledge that this run may submit and cancel one order.")
+@click.option("--config", "config_path", default=None)
+@click.pass_context
+def broker_run(ctx, workflow_id, broker_id, profile_path, version, device, on_divergence, allow_draft, confirm_side_effect, config_path):
+    """Run the generic inspection workflow with a local broker profile."""
+    if not confirm_side_effect:
+        raise click.ClickException("This inspection submits one order and cancels it; repeat with --confirm-side-effect.")
+    profiles = yaml.safe_load(profile_path.read_text(encoding="utf-8")) or {}
+    profile = (profiles.get("brokers") or {}).get(broker_id)
+    if not isinstance(profile, dict):
+        raise click.ClickException(f"broker profile not found: {broker_id}")
+    params = dict(profile)
+    params["broker_id"] = broker_id
+    result = asyncio.run(ctx.obj["registry"].run(
+        workflow_id,
+        version=version,
+        device_serial=device,
+        params=params,
+        on_divergence=on_divergence,
+        allow_draft=allow_draft,
+        config_path=config_path,
+    ))
+    if result.details.get("run_id"):
+        run_id = result.details["run_id"]
+        summary_path = Path(result.details["run_dir"]) / "audit-summary.html"
+        rows = collect_audit_rows(ctx.obj["registry"].root, [(workflow_id, run_id)])
+        generate_audit_report(rows, summary_path)
+        result.details["audit_summary_path"] = str(summary_path)
+        result.details["audit_summary_json"] = str(summary_path.with_suffix(".json"))
+        Path(result.details["run_dir"], "result.json").write_text(json.dumps(result.as_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    click.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
+    if not result.success:
+        raise click.exceptions.Exit(1)
+
+
 @workflow_cli.command("runs")
 @click.argument("workflow_id")
 @click.pass_context
@@ -170,6 +215,26 @@ def report_workflow(ctx, workflow_id: str, run_id: Optional[str], output: Option
     """Generate an HTML timeline for a workflow run."""
     report = ctx.obj["registry"].report(workflow_id, run_id=run_id, output=output)
     click.echo(str(report))
+
+
+@workflow_cli.command("audit-report")
+@click.option("--workflow", "workflow_ids", multiple=True, required=True, help="Workflow ID; latest run is used unless --run is supplied.")
+@click.option("--run", "run_refs", multiple=True, help="Specific run as workflow-id:run-id; repeat for multiple brokers.")
+@click.option("--output", type=click.Path(), default="runs/audit-summary.html", show_default=True)
+@click.pass_context
+def audit_report(ctx, workflow_ids, run_refs, output):
+    """Generate a compact multi-broker inspection summary."""
+    refs = []
+    if run_refs:
+        for ref in run_refs:
+            if ":" not in ref:
+                raise click.BadParameter("--run must use workflow-id:run-id")
+            refs.append(tuple(ref.split(":", 1)))
+    else:
+        refs = [(workflow_id, None) for workflow_id in workflow_ids]
+    rows = collect_audit_rows(ctx.obj["registry"].root, refs)
+    report = generate_audit_report(rows, output)
+    click.echo(json.dumps({"report": str(report), "json": str(report.with_suffix('.json')), "rows": rows}, ensure_ascii=False, indent=2))
 
 
 @workflow_cli.command("scan")

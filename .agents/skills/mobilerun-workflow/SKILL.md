@@ -265,3 +265,5 @@ For operational requests, respond with:
 ```
 
 If required information is missing, ask only for the smallest missing piece: device serial(s), workflow id/version, target app, desired success check, or whether the action may have side effects. Do not start a real-device run merely to guess.
+
+For broker inspections, prefer the broker-neutral `broker-daily-inspection` workflow plus a local ignored broker profile. The profile provides `broker_name`, `password_secret_id`, pending/cancelled status texts, and current-order boundaries; inject stock code and quantity as parameters. Use `workflow broker-run` so conditional login accepts an existing target session, selects the target broker when needed, and requires an explicit `--confirm-side-effect` before the one-shot order/cancel path. Use `workflow audit-report` to aggregate run IDs into a compact table with connectivity, route, funds, order, cancel, and conclusion columns.

@@ -122,3 +122,51 @@ def test_workflow_requires_cancellation_scope(tmp_path):
     report = registry.validate("cancel", version=1)
     assert not report.valid
     assert any("history_header_text" in error for error in report.errors)
+
+
+def test_verify_order_status_journals_phase_and_matches_visible_text(tmp_path):
+    journal = tmp_path / "journal.jsonl"
+    player = MacroPlayer(journal_path=str(journal))
+    state = {"nodes": [{"text": "买入 已申报（股票）", "bounds": {}}]}
+    action = {
+        "action_type": "verify_order_status",
+        "label": "pending delegate",
+        "phase": "pending",
+        "status_texts": ["买入 已申报（股票）", "买入 未报"],
+    }
+
+    assert asyncio.run(player.replay_action(action, current_state=state)) is True
+    event = json.loads(journal.read_text().splitlines()[-1])
+    assert event["event"] == "order_status_verification"
+    assert event["phase"] == "pending"
+    assert event["verified"] is True
+
+
+def test_workflow_accepts_session_and_order_status_actions(tmp_path):
+    source = tmp_path / "macro.json"
+    source.write_text(
+        json.dumps(
+            {
+                "macro_schema_version": "2.0",
+                "version": "2.0",
+                "actions": [
+                    {
+                        "action_type": "ensure_broker_session",
+                        "broker_name": "{{broker_name}}",
+                        "secret_id": "{{password_secret_id}}",
+                        "pre_state": {"phone_state": {"package": "com.example"}},
+                    },
+                    {
+                        "action_type": "verify_order_status",
+                        "phase": "pending",
+                        "status_texts": ["pending"],
+                        "pre_state": {"nodes": []},
+                    },
+                ],
+            }
+        )
+    )
+    registry = WorkflowRegistry(tmp_path / "workflows")
+    registry.import_macro(source, workflow_id="audit")
+    report = registry.validate("audit", version=1)
+    assert report.valid

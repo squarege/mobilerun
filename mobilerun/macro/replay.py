@@ -634,6 +634,38 @@ class MacroPlayer:
                 logger.info("✅ money sum verified: %s", calculated)
                 return True
 
+            elif action_type == "verify_order_status":
+                state = current_state or await self.get_current_state_snapshot()
+                raw_statuses = action.get("status_texts", [])
+                if isinstance(raw_statuses, str):
+                    raw_statuses = raw_statuses.split("|")
+                expected = [str(value).strip() for value in raw_statuses if str(value).strip()]
+                mode = action.get("match_mode", "contains")
+                matches = []
+                for node in state.get("nodes", []):
+                    text = str(node.get("text") or "").strip()
+                    if not text:
+                        continue
+                    if any((candidate in text) if mode == "contains" else (candidate == text) for candidate in expected):
+                        matches.append(text)
+                verified = bool(matches)
+                self.journal.append(
+                    "order_status_verification",
+                    label=action.get("label", "order status"),
+                    phase=action.get("phase"),
+                    expected_statuses=expected,
+                    observed_statuses=sorted(set(matches)),
+                    verified=verified,
+                )
+                if not verified:
+                    logger.error("❌ order status not found: %s", expected)
+                else:
+                    logger.info("✅ order status verified: %s", sorted(set(matches)))
+                return verified
+
+            elif action_type == "ensure_broker_session":
+                return await self._ensure_broker_session(action)
+
             elif action_type == "cancel_active_order":
                 # Only cancel in the active section. A history header bounds the
                 # search; multiple or zero current orders are refused rather
@@ -771,7 +803,7 @@ class MacroPlayer:
                 # Entry actions are responsible for establishing their own app
                 # context; requiring the recorder's launcher snapshot here makes
                 # replay depend on launcher layout, date widgets, and icons.
-                if action_type in {"start_app", "wait"}:
+                if action_type in {"start_app", "wait", "ensure_broker_session"}:
                     # start_app establishes context; wait is deliberately a
                     # state-agnostic settling barrier. The next side-effecting
                     # action still performs the guarded precondition check.
@@ -1038,6 +1070,109 @@ class MacroPlayer:
             "confirm",
         }
 
+    async def _ensure_broker_session(self, action: Dict[str, Any]) -> bool:
+        """Select and log into a broker when needed, while accepting an existing session."""
+        driver = await self._initialize_driver()
+        broker_name = str(action.get("broker_name") or "").strip()
+        if not broker_name:
+            return False
+
+        async def state():
+            return await self.get_current_state_snapshot()
+
+        def nodes_with(current, predicate):
+            return [node for node in current.get("nodes", []) if predicate(node)]
+
+        current = await state()
+        title_nodes = nodes_with(
+            current,
+            lambda node: str(node.get("text") or "").strip() == broker_name
+            and node.get("resource_id") in {"com.hexin.plat.android:id/page_title_view", "com.hexin.plat.android:id/qs_name"},
+        )
+        password_nodes = nodes_with(
+            current,
+            lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_edit_trade_password"
+            or "交易密码" in str(node.get("text") or ""),
+        )
+
+        if not title_nodes and not password_nodes:
+            account_nodes = nodes_with(
+                current,
+                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_info_view",
+            )
+            if len(account_nodes) == 1:
+                bounds = account_nodes[0].get("bounds") or {}
+                await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
+                await asyncio.sleep(float(action.get("settle_seconds", 1.0)))
+                current = await state()
+            else:
+                return False
+
+        broker_nodes = nodes_with(
+            current,
+            lambda node: str(node.get("text") or "").strip() == broker_name
+            and node.get("resource_id") == "com.hexin.plat.android:id/wt_multi_data_item_qs_name",
+        )
+        if len(broker_nodes) > 1:
+            return False
+        if len(broker_nodes) == 1:
+            bounds = broker_nodes[0].get("bounds") or {}
+            await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
+            await asyncio.sleep(float(action.get("settle_seconds", 1.0)))
+            current = await state()
+            password_nodes = nodes_with(
+                current,
+                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_edit_trade_password"
+                or "交易密码" in str(node.get("text") or ""),
+            )
+
+        if password_nodes:
+            secret_id = action.get("secret_id")
+            secret_value = await self._resolve_secret(secret_id)
+            if secret_value is None:
+                return False
+            result = await driver.input_text(secret_value, bool(action.get("clear", False)))
+            if result is False:
+                return False
+            current = await state()
+            login_nodes = nodes_with(
+                current,
+                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_btn_login"
+                or str(node.get("text") or "").strip() == "登录",
+            )
+            if len(login_nodes) != 1:
+                return False
+            bounds = login_nodes[0].get("bounds") or {}
+            await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
+            await asyncio.sleep(float(action.get("login_settle_seconds", 3.0)))
+            current = await state()
+
+        title_nodes = nodes_with(
+            current,
+            lambda node: str(node.get("text") or "").strip() == broker_name
+            and node.get("resource_id") == "com.hexin.plat.android:id/page_title_view",
+        )
+        logged_in = len(title_nodes) == 1
+        self.journal.append(
+            "broker_session",
+            broker_name=broker_name,
+            selected=logged_in,
+            login_required=bool(password_nodes),
+        )
+        return logged_in
+
+    async def _resolve_secret(self, secret_id: Optional[str]) -> Optional[str]:
+        if not secret_id:
+            return None
+        credential_manager = self._load_credential_manager()
+        if credential_manager is None:
+            return None
+        try:
+            return await credential_manager.resolve_key(secret_id)
+        except Exception:
+            logger.error("❌ Secret '%s' is not available", secret_id)
+            return None
+
     @staticmethod
     def _bounds_top(bounds: Any) -> Optional[int]:
         if not isinstance(bounds, dict):
@@ -1070,10 +1205,10 @@ class MacroPlayer:
             content_top = int(top_header["bottom"])
         except (KeyError, TypeError, ValueError):
             return None
-        allowed_texts = set(
-            action.get("allowed_cancel_texts")
-            or ["买入全部撤单", "卖出全部撤单", "买入撤单", "卖出撤单"]
-        )
+        raw_allowed = action.get("allowed_cancel_texts")
+        if isinstance(raw_allowed, str):
+            raw_allowed = raw_allowed.split("|")
+        allowed_texts = set(raw_allowed or ["买入全部撤单", "卖出全部撤单", "买入撤单", "卖出撤单"])
         candidates = []
         for node in nodes:
             if str(node.get("text") or "") not in allowed_texts:

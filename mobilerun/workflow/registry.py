@@ -28,6 +28,8 @@ _ALLOWED_ACTIONS = {
     "input_node_text",
     "verify_nodes_text_equal",
     "verify_money_sum",
+    "verify_order_status",
+    "ensure_broker_session",
     "cancel_active_order",
     "type_secret",
     "key_press",
@@ -177,6 +179,10 @@ class WorkflowRegistry:
                 errors.append(f"step {index}: type_secret requires secret_id")
             if action_type == "cancel_active_order" and not action.get("history_header_text"):
                 errors.append(f"step {index}: cancel_active_order requires history_header_text")
+            if action_type == "ensure_broker_session" and not action.get("broker_name"):
+                errors.append(f"step {index}: ensure_broker_session requires broker_name")
+            if action_type == "verify_order_status" and not action.get("status_texts"):
+                errors.append(f"step {index}: verify_order_status requires status_texts")
             if action_type == "input_text" and "text" not in action:
                 warnings.append(f"step {index}: input_text contains a fixed value")
 
@@ -316,6 +322,11 @@ class WorkflowRegistry:
             "model": model,
             "config_path": config_path,
             "draft_validation": metadata.get("status") == "draft",
+            "parameters": {
+                key: value
+                for key, value in params.items()
+                if not any(token in key.lower() for token in ("secret", "password", "token", "key"))
+            },
             "started_at": started_at,
             "run_dir": str(run_dir),
             "artifacts_dir": str(run_dir / "artifacts"),
@@ -337,6 +348,15 @@ class WorkflowRegistry:
             max_recovery_actions=int(policy.get("max_agent_actions_per_recovery", 5)),
             max_recovery_seconds=float(policy.get("max_recovery_seconds", 45)),
         )
+        if metadata.get("entry_check"):
+            entry_ok, entry_reason = await self._check_completion(player, metadata["entry_check"])
+            if not entry_ok:
+                result = RunResult(status="BLOCKED", total_steps=len(macro.get("actions", [])), failure_reason=entry_reason)
+                self._write_json(run_dir / "result.json", result.as_dict())
+                manifest.update({"finished_at": time.time(), "status": result.status, "result_path": str(run_dir / "result.json"), "journal_path": str(run_dir / "journal.jsonl")})
+                self._write_json(run_dir / "manifest.json", manifest)
+                result.details.update({"run_id": run_id, "run_dir": str(run_dir), "manifest_path": str(run_dir / "manifest.json"), "report_path": str(run_dir / "report.html")})
+                return result
         result = await player.replay_macro_result(macro)
         if result.success and metadata.get("completion_check"):
             ok, reason = await self._check_completion(player, metadata["completion_check"])

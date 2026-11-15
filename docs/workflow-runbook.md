@@ -141,3 +141,30 @@ mobilerun workflow activate <workflow-id> --version <new-version>
 ```
 
 `--create-draft` 不会自动激活。只有显式激活并在测试设备上重新验证通过后，才把异常标记为已修复。
+
+## 9. 多券商巡检
+
+使用一个通用工作流和本地券商 profile。profile 只保存券商显示名、凭证引用、状态文本和撤单区域边界；真实密码仍由凭证管理器提供，profile 文件位于被 Git 忽略的本地配置目录。
+
+执行完整巡检前，使用带有副作用确认的入口：
+
+```bash
+uv run mobilerun workflow broker-run \
+  --workflow broker-daily-inspection \
+  --broker <profile-id> \
+  --version <N> \
+  --device <serial> \
+  --confirm-side-effect \
+  --on-divergence stop
+```
+
+这个入口会处理已登录和需要切换/登录两种状态，执行一次下限价委托和撤单，并在单次运行目录中生成时间线报告和 `audit-summary.html`。不同券商的运行结果可以汇总为类似巡检表的报告：
+
+```bash
+uv run mobilerun workflow audit-report \
+  --workflow broker-daily-inspection \
+  --run broker-daily-inspection:<run-id> \
+  --output runs/audit-summary.html
+```
+
+汇总列包括站点连通性、KSGT 路由、资金查询、下单、撤单和最终结论；资金差异会写入备注。完整巡检只在确认委托和撤单风险后执行，未知副作用结果不会自动重试。
