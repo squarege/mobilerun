@@ -93,6 +93,11 @@ def activate_workflow(ctx, workflow_id: str, version: int):
 @click.option("--device", default=None)
 @click.option("--param", "parameters", multiple=True, help="Workflow parameter as key=value.")
 @click.option("--on-divergence", type=click.Choice(["stop", "recover"]), default=None)
+@click.option(
+    "--allow-draft",
+    is_flag=True,
+    help="Run an explicitly versioned draft once for real-window validation.",
+)
 @click.option("--provider", default=None)
 @click.option("--model", default=None)
 @click.option("--config", "config_path", default=None)
@@ -104,6 +109,7 @@ def run_workflow(
     device: Optional[str],
     parameters: tuple[str, ...],
     on_divergence: Optional[str],
+    allow_draft: bool,
     provider: Optional[str],
     model: Optional[str],
     config_path: Optional[str],
@@ -122,6 +128,7 @@ def run_workflow(
             device_serial=device,
             params=params,
             on_divergence=on_divergence,
+            allow_draft=allow_draft,
             provider=provider,
             model=model,
             config_path=config_path,

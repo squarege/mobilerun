@@ -269,6 +269,7 @@ class WorkflowRegistry:
         version: Optional[int] = None,
         device_serial: Optional[str] = None,
         on_divergence: Optional[str] = None,
+        allow_draft: bool = False,
         recovery_runner=None,
         params: Optional[Dict[str, Any]] = None,
         provider: Optional[str] = None,
@@ -277,10 +278,16 @@ class WorkflowRegistry:
     ) -> RunResult:
         metadata = self.inspect(workflow_id, version)
         if metadata.get("status") != "active":
-            return RunResult(
-                status="BLOCKED",
-                failure_reason="workflow version is not active",
-            )
+            if allow_draft and version is not None:
+                pass
+            else:
+                return RunResult(
+                    status="BLOCKED",
+                    failure_reason=(
+                        "workflow version is not active; use an explicit version "
+                        "with allow_draft for a validation run"
+                    ),
+                )
         report = self.validate(workflow_id, int(metadata["version"]))
         if not report.valid:
             return RunResult(
@@ -308,6 +315,7 @@ class WorkflowRegistry:
             "provider": provider,
             "model": model,
             "config_path": config_path,
+            "draft_validation": metadata.get("status") == "draft",
             "started_at": started_at,
             "run_dir": str(run_dir),
             "artifacts_dir": str(run_dir / "artifacts"),
