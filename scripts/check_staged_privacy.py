@@ -31,7 +31,7 @@ _LOCAL_PATH = re.compile(r"/(?:Users|home)/[A-Za-z0-9._-]+(?:/|\b)")
 _DEVICE_SERIAL = re.compile(r"\bemulator-\d+\b")
 _PLACEHOLDER = re.compile(
     r"^(?:null|none|false|true|stub|test|dummy|example|redacted|"
-    r"your[-_]|<|\$\{|CHANGE_ME|changeme)",
+    r"your[-_]|<|\$\{|%|CHANGE_ME|changeme)",
     re.IGNORECASE,
 )
 

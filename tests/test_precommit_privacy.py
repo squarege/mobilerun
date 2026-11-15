@@ -31,6 +31,7 @@ def test_private_workflow_marker_is_rejected_even_in_example():
 def test_placeholders_are_allowed_but_real_credentials_are_rejected():
     checker = _checker()
     assert checker.check_text("config.yaml", 'api_key: "your-api-key"') == []
+    assert checker.check_text("source.py", 'secret: "%s"') == []
     live_value = "live-" + "value-12345678"
     assert checker.check_text("config.yaml", 'api_key: "' + live_value + '"')
 
