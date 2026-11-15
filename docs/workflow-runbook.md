@@ -104,6 +104,14 @@ mobilerun workflow report order-search --run-id <run-id>
 - 新版本先在真实业务窗口验证一次，再显式激活。
 - 每个券商账号只绑定一个设备和一份工作流，避免多设备重复操作同一账户。
 
+如果合同要求先在真实业务窗口验证，可以运行校验通过的 draft 一次：
+
+```bash
+mobilerun workflow run <workflow-id> --version <N> --device <serial> --allow-draft --on-divergence stop
+```
+
+这只会执行显式指定的 draft 版本，并在 `manifest.json` 中写入 `draft_validation: true`。验证通过后再显式激活；验证失败则保持 draft 并按运行证据修复。
+
 ## 8. 异常扫描与修复
 
 扫描本地工作流运行证据，生成持久化的异常索引和人类可读摘要：

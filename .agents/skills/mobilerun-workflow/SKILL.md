@@ -127,6 +127,8 @@ For cancelling a current order, use `cancel_active_order` with a unique history-
 
 For workflows with order, payment, message, deletion, or account side effects: submit at most once, keep `allow_side_effect_retry: false`, use `--on-divergence stop`, capture before/after evidence, validate the version in the real business window, and activate only after explicit review. Keep one account/workflow/device mapping.
 
+When a contract explicitly requires real-window validation before activation, run a validated draft once with `--allow-draft --version <N>`. That flag is not a general way to run unpublished workflows; the manifest must record `draft_validation: true`, and the version remains a draft until the user reviews the run and explicitly activates it.
+
 After editing or importing a new version:
 
 ```bash

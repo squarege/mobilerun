@@ -19,6 +19,7 @@ When this skill is invoked directly:
    - workflow ID and optional version;
    - explicit device serial;
    - divergence mode: `stop` for no AI correction, or `recover` for bounded AI/local recovery;
+  use `--allow-draft` only when a valid draft must have one explicit real-window validation run before activation;
    - run count, default `1`;
    - whether to stop the batch after the first failure or continue all requested runs;
    - report path. Use a local ignored run-artifact path by default. Do not default to a tracked `docs/` path because workflow details, device identifiers, and screenshots are private.
