@@ -127,6 +127,20 @@ def run_workflow(
             config_path=config_path,
         )
     )
+    if result.details.get("run_id"):
+        try:
+            scan = AnomalyManager(ctx.obj["registry"].root).scan()
+            result.details.update(
+                {
+                    "lesson_scan_id": scan["scan_id"],
+                    "lessons_path": scan["lessons_path"],
+                    "active_lesson_count": scan["active_lesson_count"],
+                }
+            )
+            result_path = Path(result.details["run_dir"]) / "result.json"
+            result_path.write_text(json.dumps(result.as_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception as exc:
+            result.details["lesson_refresh_error"] = str(exc)
     click.echo(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
     if not result.success:
         raise click.exceptions.Exit(1)

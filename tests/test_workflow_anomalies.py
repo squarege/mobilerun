@@ -1,7 +1,9 @@
 import json
+import time
 
 import pytest
 
+import mobilerun.workflow.anomalies as anomaly_module
 from mobilerun.workflow.anomalies import AnomalyError, AnomalyManager
 from mobilerun.workflow.registry import WorkflowRegistry
 
@@ -34,7 +36,7 @@ def _write_run(root, name, status="FAILED", diverged=True, failure_reason="state
         "run_id": name,
         "workflow_id": "settings",
         "workflow_version": 1,
-        "started_at": 100,
+        "started_at": time.time(),
     }
     result = {
         "status": status,
@@ -174,3 +176,59 @@ def test_repair_rejects_unsafe_operation(tmp_path):
                 "operations": [{"op": "increase_recovery_budget", "step_index": 0}]
             },
         )
+
+
+def test_lessons_refresh_verify_reuse_and_expire(tmp_path, monkeypatch):
+    root = tmp_path
+    registry = _write_workflow(root)
+    _write_run(root, "run-1")
+    manager = _manager(root)
+
+    scanned = manager.scan()
+    divergence = next(item for item in scanned["anomalies"] if item["type"] == "DIVERGENCE")
+    assert scanned["active_lesson_count"] >= 1
+    assert any(item["status"] == "active" for item in manager.list_lessons())
+
+    operation = {"op": "insert_action", "step_index": 0, "action": {"action_type": "wait", "duration": 1.5}}
+    plan = manager.repair(
+        divergence["anomaly_id"],
+        triage_runner=lambda anomaly, with_screenshots: {
+            "classification": "DIVERGENCE",
+            "root_cause": "temporary UI transition",
+            "confidence": 0.8,
+            "needs_human": False,
+            "operations": [operation],
+            "verification": "validate and explicit replay",
+        },
+    )
+    assert len(plan["lessons"][0]["recommended_operations"]) == 1
+    recommended = plan["lessons"][0]["recommended_operations"][0]
+    assert recommended["op"] == "insert_action"
+    assert recommended["action"]["action_type"] == "wait"
+    assert recommended["action"]["duration"] == 1.5
+    applied = manager.apply_plan(plan["plan_id"], registry)
+
+    target = _write_run(root, "target-success", status="MACRO_SUCCESS", diverged=False)
+    manifest = json.loads((target / "manifest.json").read_text())
+    manifest["workflow_version"] = applied["draft"]["version"]
+    manifest["started_at"] = time.time()
+    (target / "manifest.json").write_text(json.dumps(manifest))
+    manager.scan()
+    verified_lessons = manager.list_lessons("verified")
+    assert verified_lessons
+    verified_lesson = next(item for item in verified_lessons if item["recommended_operations"])
+    verified = verified_lesson["recommended_operations"][0]
+    assert verified["op"] == "insert_action"
+    assert verified["action"]["action_type"] == "wait"
+    assert verified["action"]["duration"] == 1.5
+
+    static = manager.repair(divergence["anomaly_id"])
+    assert static["operations"] == verified_lesson["recommended_operations"]
+    assert static["lesson_ids"] == [verified_lesson["lesson_id"]]
+
+    monkeypatch.setattr(anomaly_module, "_LESSON_TTL_SECONDS", 0)
+    expired_scan = manager.scan()
+    assert expired_scan["active_lesson_count"] == 0
+    assert manager.list_lessons("expired")
+
+    assert (root / "runs" / "scans" / "lessons.json").exists()
