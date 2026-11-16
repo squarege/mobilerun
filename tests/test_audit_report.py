@@ -90,3 +90,19 @@ def test_audit_report_shows_interruption_screenshot_only_for_failed_run(tmp_path
     content = output.read_text()
     assert row["evidence"]["interruption"][0]["label"] == "中断时截图"
     assert "中断时截图" in content
+
+
+def test_audit_report_infers_unknown_after_high_risk_action(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "manifest.json").write_text(json.dumps({"run_id": "r5", "workflow_id": "audit", "parameters": {"broker_name": "Example Broker"}}))
+    (run / "result.json").write_text(json.dumps({"status": "FAILED"}))
+    events = [
+        {"event": "step", "action_type": "tap_selector", "status": "VERIFIED", "action": {"risk": "high"}},
+        {"event": "order_status_verification", "phase": "pending", "verified": False},
+    ]
+    (run / "journal.jsonl").write_text("\n".join(json.dumps(event) for event in events) + "\n")
+
+    row = build_audit_row(run)
+    assert row["conclusion"] == "未知"
+    assert any("副作用结果：未知" in note for note in row["notes"])

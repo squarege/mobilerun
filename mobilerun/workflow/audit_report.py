@@ -152,6 +152,34 @@ def _abnormal_notes(
     return notes
 
 
+def _side_effect_unknown(events: list[dict[str, Any]], result_status: str | None) -> bool:
+    if result_status != "FAILED":
+        return False
+    high_risk = {
+        "cancel_active_order",
+        "submit",
+        "purchase",
+        "pay",
+        "delete",
+        "authorize",
+        "confirm",
+    }
+    attempted = []
+    for event in events:
+        if event.get("event") != "step" or event.get("status") not in {"STARTED", "VERIFIED"}:
+            continue
+        action = event.get("action") or {}
+        if action.get("risk") == "high" or event.get("action_type") in high_risk:
+            attempted.append(event.get("action_type"))
+    cancelled = any(
+        event.get("event") == "order_status_verification"
+        and event.get("phase") == "cancelled"
+        and event.get("verified")
+        for event in events
+    )
+    return bool(attempted and not cancelled)
+
+
 def _route(events: list[dict[str, Any]]) -> str:
     route_events = [event for event in events if event.get("event") == "order_status_verification" and event.get("phase") in {"route", "pending"}]
     if not route_events:
@@ -181,7 +209,12 @@ def build_audit_row(run_dir: str | Path) -> dict[str, Any]:
     result_status = result.get("status")
     notes = _abnormal_notes(events, connectivity, route, funds, order, cancel, result_status)
     evidence = _evidence_screenshots(run_dir, events)
-    if result_status in {"INFRASTRUCTURE_ERROR", "BLOCKED", "FAILED"}:
+    inferred_unknown = _side_effect_unknown(events, result_status)
+    if inferred_unknown:
+        notes.append("副作用结果：未知，已执行高风险动作但未完成后续核验")
+    if inferred_unknown:
+        conclusion = "未知"
+    elif result_status in {"INFRASTRUCTURE_ERROR", "BLOCKED", "FAILED"}:
         conclusion = "失败"
     elif result_status == "UNKNOWN_OUTCOME":
         conclusion = "未知"
