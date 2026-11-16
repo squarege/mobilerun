@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -220,7 +221,7 @@ def report_workflow(ctx, workflow_id: str, run_id: Optional[str], output: Option
 @workflow_cli.command("audit-report")
 @click.option("--workflow", "workflow_ids", multiple=True, required=True, help="Workflow ID; latest run is used unless --run is supplied.")
 @click.option("--run", "run_refs", multiple=True, help="Specific run as workflow-id:run-id; repeat for multiple brokers.")
-@click.option("--output", type=click.Path(), default="runs/audit-summary.html", show_default=True)
+@click.option("--output", type=click.Path(), default=None, help="Report path; defaults to the workflow's dated reports directory.")
 @click.pass_context
 def audit_report(ctx, workflow_ids, run_refs, output):
     """Generate a compact multi-broker inspection summary."""
@@ -233,6 +234,16 @@ def audit_report(ctx, workflow_ids, run_refs, output):
     else:
         refs = [(workflow_id, None) for workflow_id in workflow_ids]
     rows = collect_audit_rows(ctx.obj["registry"].root, refs)
+    if output is None:
+        workflow_dir = ctx.obj["registry"].root / workflow_ids[0] / "reports"
+        workflow_dir.mkdir(parents=True, exist_ok=True)
+        stem = datetime.now().strftime("%Y-%m-%d")
+        output_path = workflow_dir / f"{stem}.html"
+        suffix = 2
+        while output_path.exists() or output_path.with_suffix(".json").exists():
+            output_path = workflow_dir / f"{stem}_{suffix:02d}.html"
+            suffix += 1
+        output = str(output_path)
     report = generate_audit_report(rows, output)
     click.echo(json.dumps({"report": str(report), "json": str(report.with_suffix('.json')), "rows": rows}, ensure_ascii=False, indent=2))
 

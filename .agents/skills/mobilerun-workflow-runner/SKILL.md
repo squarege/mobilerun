@@ -216,4 +216,4 @@ uv run mobilerun workflow broker-run \
   --on-divergence stop
 ```
 
-The profile supplies the display name, credential reference, expected pending/cancelled statuses, and current-order boundary. The run records broker session selection, code-side funds checks, pending status, cancellation target, and cancelled status. After multiple broker runs, use `workflow audit-report` with one `--run workflow-id:run-id` per run to produce the compact summary table.
+The profile supplies the display name, credential reference, expected pending/cancelled statuses, and current-order boundary. The run records broker session selection, code-side funds checks, pending status, cancellation target, and cancelled status. After multiple broker runs, use `workflow audit-report` with one `--run workflow-id:run-id` per run to produce the compact summary table. Without `--output`, the report is stored under `workflows/<workflow-id>/reports/YYYY-MM-DD.html`; repeated reports on one day receive `_02`, `_03`, and so on.

@@ -158,13 +158,12 @@ uv run mobilerun workflow broker-run \
   --on-divergence stop
 ```
 
-这个入口会处理已登录和需要切换/登录两种状态，执行一次下限价委托和撤单，并在单次运行目录中生成时间线报告和 `audit-summary.html`。不同券商的运行结果可以汇总为类似巡检表的报告：
+这个入口会处理已登录和需要切换/登录两种状态，执行一次下限价委托和撤单，并在单次运行目录中生成时间线报告和 `audit-summary.html`。不同券商的运行结果可以汇总为类似巡检表的报告；不指定 `--output` 时，汇总报告写入 workflow 的 `reports/YYYY-MM-DD.html`，同一天重复生成会追加 `_02`、`_03` 后缀：
 
 ```bash
 uv run mobilerun workflow audit-report \
   --workflow broker-daily-inspection \
-  --run broker-daily-inspection:<run-id> \
-  --output runs/audit-summary.html
+  --run broker-daily-inspection:<run-id>
 ```
 
 汇总列包括站点连通性、KSGT 路由、资金查询、下单、撤单和最终结论；资金差异会写入备注。完整巡检只在确认委托和撤单风险后执行，未知副作用结果不会自动重试。
