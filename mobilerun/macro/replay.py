@@ -482,7 +482,29 @@ class MacroPlayer:
             elif action_type == "input_text":
                 text = action.get("text", "")
                 clear = action.get("clear", False)
+                tap_x = action.get("target_x")
+                tap_y = action.get("target_y")
+                if tap_x is not None and tap_y is not None:
+                    # Focus the field explicitly, then verify the text landed;
+                    # retry once when focus was lost (e.g. keyboard race).
+                    if await driver.tap(int(tap_x), int(tap_y)) is False:
+                        return False
+                    await asyncio.sleep(action.get("settle_seconds", 0.5))
                 logger.info(f"⌨️  Inputting text: '{text}'")
+                result = await driver.input_text(text, clear)
+                if result is False:
+                    return False
+                if tap_x is None or tap_y is None:
+                    return True
+                await asyncio.sleep(float(action.get("settle_seconds", 0.8)))
+                if self._point_text_matches(await self.get_current_state_snapshot(), int(tap_x), int(tap_y), text):
+                    return True
+                logger.warning(
+                    "input_text: text did not land on first try; retrying"
+                )
+                if await driver.tap(int(tap_x), int(tap_y)) is False:
+                    return False
+                await asyncio.sleep(action.get("settle_seconds", 0.5))
                 result = await driver.input_text(text, clear)
                 return result is not False
 
@@ -531,18 +553,10 @@ class MacroPlayer:
                 # input once if the text did not land (e.g. focus race).
                 await asyncio.sleep(float(action.get("settle_seconds", 0.8)))
                 if tap_x is not None and tap_y is not None:
-                    check_state = await self.get_current_state_snapshot()
-                    for node in check_state.get("nodes", []):
-                        bounds = node.get("bounds") or {}
-                        try:
-                            inside = (
-                                bounds["left"] <= int(tap_x) <= bounds["right"]
-                                and bounds["top"] <= int(tap_y) <= bounds["bottom"]
-                            )
-                        except (KeyError, TypeError, ValueError):
-                            continue
-                        if inside and str(node.get("text") or "").strip() == text:
-                            return True
+                    if self._point_text_matches(
+                        await self.get_current_state_snapshot(), int(tap_x), int(tap_y), text
+                    ):
+                        return True
                     logger.warning(
                         "input_node_text: text did not land on first try; retrying"
                     )
@@ -681,52 +695,77 @@ class MacroPlayer:
                 return True
 
             elif action_type == "verify_order_status":
+                def match_order_status(state_now):
+                    raw_statuses = action.get("status_texts", [])
+                    if isinstance(raw_statuses, str):
+                        raw_statuses = raw_statuses.split("|")
+                    expected = [str(value).strip() for value in raw_statuses if str(value).strip()]
+                    mode = action.get("match_mode", "contains")
+                    raw_targets = action.get("target_texts", [])
+                    if isinstance(raw_targets, str):
+                        raw_targets = raw_targets.split("|")
+                    target_texts = [str(value).strip() for value in raw_targets if str(value).strip()]
+                    target_nodes = []
+                    if target_texts:
+                        target_nodes = [
+                            node
+                            for node in state_now.get("nodes", [])
+                            if any(self._status_matches(str(node.get("text") or "").strip(), target, mode) for target in target_texts)
+                        ]
+                    matches = []
+                    observed_candidates = []
+                    phase_keywords = {
+                        "pending": ("申报", "未报"),
+                        "cancelled": ("撤单", "已撤"),
+                    }.get(action.get("phase"), ())
+                    for node in state_now.get("nodes", []):
+                        text = str(node.get("text") or "").strip()
+                        if not text:
+                            continue
+                        if target_texts and not target_nodes:
+                            continue
+                        if target_texts and target_nodes:
+                            bounds = node.get("bounds") or {}
+                            try:
+                                node_center_y = (int(bounds["top"]) + int(bounds["bottom"])) / 2
+                                in_target_row = any(
+                                    abs(node_center_y - ((int(target.get("bounds", {}).get("top", 0)) + int(target.get("bounds", {}).get("bottom", 0))) / 2)) <= 140
+                                    for target in target_nodes
+                                )
+                            except (TypeError, ValueError):
+                                in_target_row = False
+                            if not in_target_row:
+                                continue
+                        if phase_keywords and any(keyword in text for keyword in phase_keywords):
+                            observed_candidates.append(text)
+                        if any(self._status_matches(text, candidate, mode) for candidate in expected):
+                            matches.append(text)
+                    return expected, target_texts, target_nodes, matches, observed_candidates
+
+                refresh_retries = max(0, int(action.get("refresh_retries", 1)))
                 state = current_state or await self.get_current_state_snapshot()
-                raw_statuses = action.get("status_texts", [])
-                if isinstance(raw_statuses, str):
-                    raw_statuses = raw_statuses.split("|")
-                expected = [str(value).strip() for value in raw_statuses if str(value).strip()]
-                mode = action.get("match_mode", "contains")
-                raw_targets = action.get("target_texts", [])
-                if isinstance(raw_targets, str):
-                    raw_targets = raw_targets.split("|")
-                target_texts = [str(value).strip() for value in raw_targets if str(value).strip()]
-                target_nodes = []
-                if target_texts:
-                    target_nodes = [
+                for attempt in range(refresh_retries + 1):
+                    expected, target_texts, target_nodes, matches, observed_candidates = match_order_status(state)
+                    verified = bool(matches)
+                    if verified or attempt >= refresh_retries:
+                        break
+                    # The orders list can load slowly right after submission;
+                    # refresh the page once before declaring the target missing.
+                    refresh_nodes = [
                         node
                         for node in state.get("nodes", [])
-                        if any(self._status_matches(str(node.get("text") or "").strip(), target, mode) for target in target_texts)
+                        if node.get("resource_id") == "com.hexin.plat.android:id/refresh_img"
                     ]
-                matches = []
-                observed_candidates = []
-                phase_keywords = {
-                    "pending": ("申报", "未报"),
-                    "cancelled": ("撤单", "已撤"),
-                }.get(action.get("phase"), ())
-                for node in state.get("nodes", []):
-                    text = str(node.get("text") or "").strip()
-                    if not text:
-                        continue
-                    if target_texts and not target_nodes:
-                        continue
-                    if target_texts and target_nodes:
-                        bounds = node.get("bounds") or {}
-                        try:
-                            node_center_y = (int(bounds["top"]) + int(bounds["bottom"])) / 2
-                            in_target_row = any(
-                                abs(node_center_y - ((int(target.get("bounds", {}).get("top", 0)) + int(target.get("bounds", {}).get("bottom", 0))) / 2)) <= 140
-                                for target in target_nodes
-                            )
-                        except (TypeError, ValueError):
-                            in_target_row = False
-                        if not in_target_row:
-                            continue
-                    if phase_keywords and any(keyword in text for keyword in phase_keywords):
-                        observed_candidates.append(text)
-                    if any(self._status_matches(text, candidate, mode) for candidate in expected):
-                        matches.append(text)
-                verified = bool(matches)
+                    if len(refresh_nodes) != 1:
+                        break
+                    logger.warning(
+                        "verify_order_status: target status not found; refreshing once"
+                    )
+                    bounds = refresh_nodes[0].get("bounds") or {}
+                    if await driver.tap(int(bounds["center_x"]), int(bounds["center_y"])) is False:
+                        break
+                    await asyncio.sleep(float(action.get("refresh_settle_seconds", 2.5)))
+                    state = await self.get_current_state_snapshot()
                 self.journal.append(
                     "order_status_verification",
                     label=action.get("label", "order status"),
@@ -1373,6 +1412,7 @@ class MacroPlayer:
             previous_fingerprint = fingerprint
         if len(broker_nodes) > 1:
             return False
+        login_required = False
         if len(broker_nodes) == 1:
             bounds = broker_nodes[0].get("bounds") or {}
             await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
@@ -1385,30 +1425,62 @@ class MacroPlayer:
             )
 
         if password_nodes:
+            login_required = True
             secret_id = action.get("secret_id")
-            secret_value = await self._resolve_secret(secret_id)
-            if secret_value is None:
-                return False
-            result = await driver.input_text(secret_value, bool(action.get("clear", False)))
-            if result is False:
-                return False
-            current = await state()
-            login_nodes = nodes_with(
-                current,
-                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_btn_login",
-            )
-            if not login_nodes:
+
+            async def submit_login() -> Optional[Dict[str, Any]]:
+                """Type the secret and tap the single visible login control."""
+                secret_value = await self._resolve_secret(secret_id)
+                if secret_value is None:
+                    return None
+                result = await driver.input_text(secret_value, bool(action.get("clear", False)))
+                if result is False:
+                    return None
+                state_now = await state()
                 login_nodes = nodes_with(
-                    current,
-                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/keyboard_key_imeaction"
-                    and str(node.get("text") or "").strip() == "登录",
+                    state_now,
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_btn_login",
                 )
-            if len(login_nodes) != 1:
+                if not login_nodes:
+                    login_nodes = nodes_with(
+                        state_now,
+                        lambda node: node.get("resource_id") == "com.hexin.plat.android:id/keyboard_key_imeaction"
+                        and str(node.get("text") or "").strip() == "登录",
+                    )
+                if len(login_nodes) != 1:
+                    return None
+                bounds = login_nodes[0].get("bounds") or {}
+                await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
+                await asyncio.sleep(float(action.get("login_settle_seconds", 3.0)))
+                return await state()
+
+            current = await submit_login()
+            if current is None:
                 return False
-            bounds = login_nodes[0].get("bounds") or {}
-            await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
-            await asyncio.sleep(float(action.get("login_settle_seconds", 3.0)))
-            current = await state()
+            # A broker gateway may answer the login with a modal (e.g.
+            # 登录超时). Dismiss it and retry the bounded login once; the
+            # retry stays a safe session action, never a trade side effect.
+            for _ in range(max(0, int(action.get("login_dialog_retries", 1)))):
+                dialog_nodes = nodes_with(
+                    current,
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/ok_btn",
+                )
+                if len(dialog_nodes) != 1:
+                    break
+                bounds = dialog_nodes[0].get("bounds") or {}
+                await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
+                await asyncio.sleep(float(action.get("login_settle_seconds", 3.0)))
+                current = await state()
+                password_nodes = nodes_with(
+                    current,
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_edit_trade_password"
+                    or "交易密码" in str(node.get("text") or ""),
+                )
+                if not password_nodes:
+                    break
+                current = await submit_login()
+                if current is None:
+                    return False
 
         title_nodes = []
         for _ in range(max(1, int(action.get("login_settle_polls", 10)))):
@@ -1429,9 +1501,25 @@ class MacroPlayer:
             "broker_session",
             broker_name=broker_name,
             selected=logged_in,
-            login_required=bool(password_nodes),
+            login_required=login_required,
         )
         return logged_in
+
+    @staticmethod
+    def _point_text_matches(state: Dict[str, Any], x: int, y: int, text: str) -> bool:
+        """Whether the node covering the point shows exactly the given text."""
+        for node in state.get("nodes", []):
+            bounds = node.get("bounds") or {}
+            try:
+                inside = (
+                    bounds["left"] <= x <= bounds["right"]
+                    and bounds["top"] <= y <= bounds["bottom"]
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if inside and str(node.get("text") or "").strip() == text:
+                return True
+        return False
 
     async def _resolve_secret(self, secret_id: Optional[str]) -> Optional[str]:
         if not secret_id:
