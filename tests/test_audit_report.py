@@ -48,3 +48,28 @@ def test_audit_report_keeps_only_abnormal_evidence(tmp_path):
     assert any("post" in note and "差值=-1" in note for note in row["notes"])
     assert any("下单状态：失败" in note and "未知状态" in note for note in row["notes"])
     assert not any("pre" in note for note in row["notes"])
+
+
+def test_audit_report_groups_embedded_evidence_screenshots_by_broker(tmp_path):
+    run = tmp_path / "run"
+    (run / "artifacts" / "screenshots").mkdir(parents=True)
+    (run / "artifacts" / "screenshots" / "funds.png").write_bytes(b"png")
+    (run / "manifest.json").write_text(json.dumps({"run_id": "r3", "workflow_id": "audit", "parameters": {"broker_name": "Example Broker"}}))
+    (run / "result.json").write_text(json.dumps({"status": "MACRO_SUCCESS"}))
+    events = [
+        {"event": "broker_session", "selected": True},
+        {"event": "order_status_verification", "phase": "route", "verified": True, "observed_statuses": ["KSGT"]},
+        {"event": "money_verification", "verified": True},
+        {"event": "order_status_verification", "phase": "pending", "verified": True},
+        {"event": "order_status_verification", "phase": "cancelled", "verified": True},
+        {"event": "step", "index": 4, "action": {"evidence_role": "funds_pre"}},
+        {"event": "observation", "index": 4, "phase": "post", "screenshot_path": "artifacts/screenshots/funds.png"},
+    ]
+    (run / "journal.jsonl").write_text("\n".join(json.dumps(event) for event in events) + "\n")
+
+    row = build_audit_row(run)
+    output = generate_audit_report([row], tmp_path / "summary.html")
+    content = output.read_text()
+    assert "关键截图证据" in content
+    assert "资金查询（下单前）" in content
+    assert "data:image/png;base64" in content

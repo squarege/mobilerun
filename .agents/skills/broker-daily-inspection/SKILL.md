@@ -48,8 +48,8 @@ brokers:
     password_secret_id: <credential id>
     stock_code: '<code>'
     quantity: '<quantity>'
-    pending_statuses: '<status>|<status>'
-    cancelled_statuses: '<status>|<status>'
+    pending_statuses: '<exact status>|<prefix>(*)'
+    cancelled_statuses: '<exact status>|<prefix>(*)'
     history_header_text: <history section text>
     cancel_target_text: <current order cancel text>
     active_cancel_texts: '<current order cancel text>'
@@ -99,6 +99,13 @@ The workflow should perform these checks in order:
 8. Confirm cancellation and verify a profile-allowed cancelled status.
 9. Return to holdings and repeat the code-side funds check.
 
+Status patterns support a strict parenthetical wildcard: `<prefix>(*)` matches
+the same prefix with one non-empty parenthetical value, including full-width
+parentheses. It does not match a different status such as a partial
+cancellation. Keep exact alternatives in the profile for statuses that do not
+have a parenthetical suffix; unexpected visible statuses are recorded as
+failures in the report.
+
 Read `result.json` and `journal.jsonl` for the decision. A successful run should contain `broker_session`, two `money_verification` events, a pending `order_status_verification`, a `cancel_target`, and a cancelled `order_status_verification`. The run directory also contains state snapshots, screenshots, the HTML timeline, and `audit-summary.html`.
 
 After a successful draft validation, activate the validated version:
@@ -134,7 +141,13 @@ Repeated reports on the same date receive `_02`, `_03`, and later suffixes. Repo
 - order
 - cancel
 - conclusion
-- funds mismatch notes
+- abnormal evidence notes
+
+The report also embeds the workflow-marked post-action screenshots grouped by
+broker: funds before/after the side effect, the current-order page used for the
+order check, and the post-cancellation status page. Normal checks are omitted
+from the notes section; unexpected status text, mismatched funds, missing
+evidence, and failed side effects remain visible there.
 
 Use `PASS` only when the required checks and cleanup passed. Use `WARN` for a recorded funds mismatch or an expected negative route result that still satisfies the profile. Use `FAILED` or `UNKNOWN_OUTCOME` for failed or uncertain side effects.
 

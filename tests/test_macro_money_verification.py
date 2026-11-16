@@ -142,6 +142,25 @@ def test_verify_order_status_journals_phase_and_matches_visible_text(tmp_path):
     assert event["verified"] is True
 
 
+def test_verify_order_status_allows_parenthetical_wildcard_but_rejects_partial_status(tmp_path):
+    journal = tmp_path / "journal.jsonl"
+    player = MacroPlayer(journal_path=str(journal))
+    action = {
+        "action_type": "verify_order_status",
+        "phase": "cancelled",
+        "status_texts": "全部撤单(*)",
+    }
+
+    assert asyncio.run(player.replay_action(action, current_state={"nodes": [{"text": "全部撤单（基金）"}]})) is True
+    event = json.loads(journal.read_text().splitlines()[-1])
+    assert event["observed_statuses"] == ["全部撤单（基金）"]
+
+    assert asyncio.run(player.replay_action(action, current_state={"nodes": [{"text": "部分撤单（基金）"}]})) is False
+    event = json.loads(journal.read_text().splitlines()[-1])
+    assert event["verified"] is False
+    assert event["observed_candidates"] == ["部分撤单（基金）"]
+
+
 def test_workflow_accepts_session_and_order_status_actions(tmp_path):
     source = tmp_path / "macro.json"
     source.write_text(

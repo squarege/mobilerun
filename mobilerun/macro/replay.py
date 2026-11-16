@@ -650,11 +650,18 @@ class MacroPlayer:
                 expected = [str(value).strip() for value in raw_statuses if str(value).strip()]
                 mode = action.get("match_mode", "contains")
                 matches = []
+                observed_candidates = []
+                phase_keywords = {
+                    "pending": ("申报", "未报"),
+                    "cancelled": ("撤单", "已撤"),
+                }.get(action.get("phase"), ())
                 for node in state.get("nodes", []):
                     text = str(node.get("text") or "").strip()
                     if not text:
                         continue
-                    if any((candidate in text) if mode == "contains" else (candidate == text) for candidate in expected):
+                    if phase_keywords and any(keyword in text for keyword in phase_keywords):
+                        observed_candidates.append(text)
+                    if any(self._status_matches(text, candidate, mode) for candidate in expected):
                         matches.append(text)
                 verified = bool(matches)
                 self.journal.append(
@@ -663,6 +670,7 @@ class MacroPlayer:
                     phase=action.get("phase"),
                     expected_statuses=expected,
                     observed_statuses=sorted(set(matches)),
+                    observed_candidates=sorted(set(observed_candidates)),
                     verified=verified,
                 )
                 if not verified:
@@ -1077,6 +1085,23 @@ class MacroPlayer:
             "authorize",
             "confirm",
         }
+
+    @staticmethod
+    def _status_matches(text: str, candidate: str, mode: str) -> bool:
+        """Match status text, allowing only the content inside parentheses to vary."""
+        normalized_text = text.replace("（", "(").replace("）", ")")
+        normalized_candidate = candidate.replace("（", "(").replace("）", ")")
+        if "(*)" not in normalized_candidate:
+            return (
+                normalized_candidate in normalized_text
+                if mode == "contains"
+                else normalized_candidate == normalized_text
+            )
+        prefix, suffix = normalized_candidate.split("(*)", 1)
+        pattern = re.escape(prefix) + r"\([^()]+\)" + re.escape(suffix)
+        if mode == "contains":
+            return re.search(pattern, normalized_text) is not None
+        return re.fullmatch(pattern, normalized_text) is not None
 
     async def _ensure_broker_session(self, action: Dict[str, Any]) -> bool:
         """Select and log into a broker when needed, while accepting an existing session."""
