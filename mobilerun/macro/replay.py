@@ -385,6 +385,16 @@ class MacroPlayer:
                 await asyncio.sleep(5.0)
                 return result is not False
 
+            elif action_type == "stop_app":
+                package = action.get("package") or self.app_package
+                if not package:
+                    logger.error("❌ stop_app requires a package")
+                    return False
+                result = await driver.stop_app(package)
+                if isinstance(result, str) and result.lower().startswith("failed"):
+                    return False
+                return result is not False
+
             elif action_type == "tap_selector":
                 selector = action.get("selector") or {}
                 state = current_state or await self.get_current_state_snapshot()
@@ -577,7 +587,15 @@ class MacroPlayer:
                     )
                     return False
                 target_text = str(target_node.get("text") or "").strip()
-                if source_text != target_text:
+                verified = source_text == target_text
+                self.journal.append(
+                    "node_text_verification",
+                    label=action.get("label", "node text equality"),
+                    source_text=source_text,
+                    target_text=target_text,
+                    verified=verified,
+                )
+                if not verified:
                     logger.error(
                         "❌ verify_nodes_text_equal mismatch: %r != %r",
                         source_text,
@@ -1133,6 +1151,16 @@ class MacroPlayer:
         )
 
         if not title_nodes and not password_nodes:
+            transaction_nodes = nodes_with(
+                current,
+                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/title"
+                and str(node.get("text") or "").strip() == "交易",
+            )
+            if len(transaction_nodes) == 1:
+                bounds = transaction_nodes[0].get("bounds") or {}
+                await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
+                await asyncio.sleep(float(action.get("settle_seconds", 1.0)))
+                current = await state()
             account_nodes = nodes_with(
                 current,
                 lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_info_view",

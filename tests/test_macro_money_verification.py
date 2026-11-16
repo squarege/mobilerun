@@ -161,6 +161,30 @@ def test_verify_order_status_allows_parenthetical_wildcard_but_rejects_partial_s
     assert event["observed_candidates"] == ["部分撤单（基金）"]
 
 
+def test_verify_nodes_text_equal_journals_price_mismatch(tmp_path):
+    journal = tmp_path / "journal.jsonl"
+    player = MacroPlayer(journal_path=str(journal))
+    action = {
+        "action_type": "verify_nodes_text_equal",
+        "label": "verify_limit_down_price",
+        "source_selector": {"resource_id": "limit_down"},
+        "point": {"x": 471, "y": 638},
+    }
+    state = {
+        "nodes": [
+            {"text": "0.303", "resource_id": "limit_down", "bounds": {"left": 200, "top": 700, "right": 300, "bottom": 750}},
+            {"text": "0.338", "resource_id": "", "bounds": {"left": 336, "top": 586, "right": 607, "bottom": 691}},
+        ]
+    }
+
+    assert asyncio.run(player.replay_action(action, current_state=state)) is False
+    event = json.loads(journal.read_text().splitlines()[-1])
+    assert event["event"] == "node_text_verification"
+    assert event["verified"] is False
+    assert event["source_text"] == "0.303"
+    assert event["target_text"] == "0.338"
+
+
 def test_workflow_accepts_session_and_order_status_actions(tmp_path):
     source = tmp_path / "macro.json"
     source.write_text(

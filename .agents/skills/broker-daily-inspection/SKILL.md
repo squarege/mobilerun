@@ -89,15 +89,17 @@ uv run mobilerun workflow broker-run \
 
 The workflow should perform these checks in order:
 
-1. Accept an existing target-broker session or select and log in to the target broker.
-2. Capture broker-session evidence.
-3. Enter holdings and verify `available + market_value ~= total_assets` in code, before the order.
-4. Open buy, inject stock code and quantity, and select the visible lower-limit/limit-down price.
-5. Capture the filled order form and submit exactly once.
-6. Open current orders and verify a profile-allowed pending status.
-7. Select the unique profile-specified current-order cancel target, never a history control.
-8. Confirm cancellation and verify a profile-allowed cancelled status.
-9. Return to holdings and repeat the code-side funds check.
+1. Force-start the target app and converge from the home page to the trading tab.
+2. Accept an existing target-broker session or select and log in to the target broker.
+3. Capture broker-session evidence.
+4. Enter holdings and verify `available + market_value ~= total_assets` in code, before the order.
+5. Open buy, inject stock code and quantity, and select the visible lower-limit/limit-down price.
+6. Copy the displayed lower-limit price into the order price field and verify exact equality in code; stop before submission on mismatch.
+7. Capture the filled order form and submit exactly once.
+8. Open current orders and verify a profile-allowed pending status.
+9. Select the unique profile-specified current-order cancel target, never a history control.
+10. Confirm cancellation and verify a profile-allowed cancelled status.
+11. Return to holdings and repeat the code-side funds check, then stop the app.
 
 Status patterns support a strict parenthetical wildcard: `<prefix>(*)` matches
 the same prefix with one non-empty parenthetical value, including full-width

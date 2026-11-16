@@ -20,6 +20,7 @@ from mobilerun.workflow.report import generate_report
 _SAFE_ID = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 _ALLOWED_ACTIONS = {
     "start_app",
+    "stop_app",
     "tap",
     "tap_selector",
     "swipe",
@@ -307,6 +308,8 @@ class WorkflowRegistry:
         except ValueError as exc:
             return RunResult(status="FAILED", failure_reason=str(exc))
         macro["actions"] = self.render_actions(macro.get("actions", []), params)
+        first_action_type = (macro.get("actions") or [{}])[0].get("action_type")
+        last_action_type = (macro.get("actions") or [{}])[-1].get("action_type")
 
         workflow_dir = self._workflow_dir(workflow_id)
         run_id = f"{time.strftime('%Y-%m-%d_%H-%M-%S')}_{uuid.uuid4().hex[:8]}"
@@ -349,7 +352,7 @@ class WorkflowRegistry:
             max_recovery_seconds=float(policy.get("max_recovery_seconds", 45)),
             app_package=(metadata.get("entry_check") or {}).get("package"),
         )
-        if metadata.get("entry_check"):
+        if metadata.get("entry_check") and first_action_type != "start_app":
             entry_ok, entry_reason = await self._check_completion(player, metadata["entry_check"])
             if not entry_ok:
                 result = RunResult(status="BLOCKED", total_steps=len(macro.get("actions", [])), failure_reason=entry_reason)
@@ -359,7 +362,7 @@ class WorkflowRegistry:
                 result.details.update({"run_id": run_id, "run_dir": str(run_dir), "manifest_path": str(run_dir / "manifest.json"), "report_path": str(run_dir / "report.html")})
                 return result
         result = await player.replay_macro_result(macro)
-        if result.success and metadata.get("completion_check"):
+        if result.success and metadata.get("completion_check") and last_action_type != "stop_app":
             ok, reason = await self._check_completion(player, metadata["completion_check"])
             if not ok:
                 result.status = "FAILED"

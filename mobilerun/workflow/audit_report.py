@@ -136,6 +136,12 @@ def _abnormal_notes(
         notes.append(f"下单状态：{order}{_status_evidence(events, 'order_status_verification', 'pending')}")
     if cancel != "通过":
         notes.append(f"撤单状态：{cancel}{_status_evidence(events, 'order_status_verification', 'cancelled')}")
+    price_checks = [event for event in events if event.get("event") == "node_text_verification"]
+    for event in price_checks:
+        if not event.get("verified"):
+            notes.append(
+                f"价格核验失败：下限价={event.get('source_text')}, 委托价={event.get('target_text')}"
+            )
     if result_status not in {None, "MACRO_SUCCESS", "SUCCESS"}:
         notes.append(f"运行状态：{result_status}")
     return notes
