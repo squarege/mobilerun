@@ -316,7 +316,7 @@ class ScopedRecoveryAgent:
     ) -> ChatMessage:
         """Attach the current screenshot when the configured model accepts images."""
         screenshot_path = artifacts.get("screenshot_path")
-        if screenshot_path and self.player.artifacts_dir:
+        if screenshot_path and self.player.artifacts_dir and self._supports_images():
             path = self.player.artifacts_dir.parent / screenshot_path
             try:
                 return ChatMessage(
@@ -329,6 +329,18 @@ class ScopedRecoveryAgent:
             except OSError:
                 pass
         return ChatMessage(role="user", content=prompt)
+
+    def _supports_images(self) -> bool:
+        provider = self.player.provider
+        if provider:
+            return provider not in {"OpenAILike", "DeepSeek"}
+        try:
+            config_path = self.player.config_path or str(ConfigLoader.get_user_config_path())
+            config = ConfigLoader.load(config_path)
+            profile = config.llm_profiles.get("fast_agent")
+            return bool(profile and profile.provider not in {"OpenAILike", "DeepSeek"})
+        except Exception:
+            return False
 
     async def _record_recovery_state(
         self, step_index: int, phase: str, state: Dict[str, Any], *, action_count: int
