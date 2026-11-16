@@ -1112,6 +1112,16 @@ class MacroPlayer:
                 current,
                 lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_info_view",
             )
+            if not account_nodes:
+                account_nodes = nodes_with(
+                    current,
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_layout",
+                )
+            if not account_nodes:
+                account_nodes = nodes_with(
+                    current,
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/arrow_image",
+                )
             if len(account_nodes) == 1:
                 bounds = account_nodes[0].get("bounds") or {}
                 await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
@@ -1128,6 +1138,19 @@ class MacroPlayer:
                 "com.hexin.plat.android:id/txt_qsname",
             },
         )
+        for _ in range(10):
+            if broker_nodes:
+                break
+            await asyncio.sleep(0.5)
+            current = await state()
+            broker_nodes = nodes_with(
+                current,
+                lambda node: str(node.get("text") or "").strip() == broker_name
+                and node.get("resource_id") in {
+                    "com.hexin.plat.android:id/wt_multi_data_item_qs_name",
+                    "com.hexin.plat.android:id/txt_qsname",
+                },
+            )
         if len(broker_nodes) > 1:
             return False
         if len(broker_nodes) == 1:
