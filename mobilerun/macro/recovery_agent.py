@@ -7,6 +7,7 @@ as an instruction to complete and it cannot execute arbitrary tool calls.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -99,9 +100,11 @@ class ScopedRecoveryAgent:
                 **prompt_artifacts,
             )
             try:
-                response = await self.llm.achat(
-                    messages=[message]
-                )
+                chat = getattr(self.llm, "chat", None)
+                if callable(chat):
+                    response = await asyncio.to_thread(chat, messages=[message])
+                else:
+                    response = await self.llm.achat(messages=[message])
                 llm_calls += 1
                 content = self._response_text(response)
                 # Record the raw model output (reasoning + decision JSON)

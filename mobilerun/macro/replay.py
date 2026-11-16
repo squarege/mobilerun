@@ -836,6 +836,7 @@ class MacroPlayer:
         )
         recovered = False
         recovery_attempts = 0
+        side_effect_executed = False
 
         logger.info(f"🎬 Starting macro replay: '{description}'")
         logger.info(f"📊 Total actions to execute: {len(actions)} / {total_actions}")
@@ -1050,7 +1051,7 @@ class MacroPlayer:
                             status="UNKNOWN_OUTCOME",
                         )
             if not success:
-                status = "UNKNOWN_OUTCOME" if self._is_high_risk(action) else "FAILED"
+                status = "UNKNOWN_OUTCOME" if self._is_high_risk(action) or side_effect_executed else "FAILED"
                 self.journal.append(
                     "step",
                     index=step_index,
@@ -1064,6 +1065,9 @@ class MacroPlayer:
                     f"{status.lower()}: action failed: {action_type}",
                     status=status,
                 )
+
+            if self._is_high_risk(action):
+                side_effect_executed = True
 
             post_state = action.get("post_state")
             if post_state:
@@ -1115,7 +1119,7 @@ class MacroPlayer:
                         result,
                         offset,
                         reason,
-                        status="UNKNOWN_OUTCOME" if self._is_high_risk(action) else "FAILED",
+                        status="UNKNOWN_OUTCOME" if self._is_high_risk(action) or side_effect_executed else "FAILED",
                     )
 
             result.steps_completed = offset + 1
