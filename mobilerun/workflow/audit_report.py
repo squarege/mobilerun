@@ -41,6 +41,17 @@ def _column(events: list[dict[str, Any]], event_name: str, phase: str | None = N
     return "通过" if all(event.get("verified", event.get("selected", False)) for event in matches) else "失败"
 
 
+def _connectivity(events: list[dict[str, Any]]) -> tuple[str, bool]:
+    """Connectivity reflects the final session outcome. Earlier failed
+    attempts are the recovery path, not a failed inspection."""
+    matches = [event for event in events if event.get("event") == "broker_session"]
+    if not matches:
+        return "—", False
+    recovered = any(not event.get("selected", False) for event in matches[:-1])
+    established = bool(matches[-1].get("selected", False))
+    return ("通过" if established else "失败"), recovered
+
+
 def _funds(events: list[dict[str, Any]]) -> tuple[str, list[str]]:
     checks = [event for event in events if event.get("event") == "money_verification"]
     if not checks:
@@ -202,12 +213,14 @@ def build_audit_row(run_dir: str | Path) -> dict[str, Any]:
     parameters = manifest.get("parameters") or {}
     broker_name = parameters.get("broker_name") or parameters.get("broker_id") or manifest.get("workflow_id", "—")
     funds, _ = _funds(events)
-    connectivity = _column(events, "broker_session")
+    connectivity, session_recovered = _connectivity(events)
     order = _column(events, "order_status_verification", "pending")
     cancel = _column(events, "order_status_verification", "cancelled")
     route = _route(events)
     result_status = result.get("status")
     notes = _abnormal_notes(events, connectivity, route, funds, order, cancel, result_status)
+    if session_recovered:
+        notes.append("会话恢复：首次券商会话未建立，恢复重试后成功")
     evidence = _evidence_screenshots(run_dir, events)
     inferred_unknown = _side_effect_unknown(events, result_status)
     if inferred_unknown:
