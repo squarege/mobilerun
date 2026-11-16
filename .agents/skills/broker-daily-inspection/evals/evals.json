@@ -1,0 +1,23 @@
+{
+  "skill_name": "broker-daily-inspection",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "给 broker-daily-inspection 增加一家券商，先说明需要哪些本地凭证和 profile 字段，不要运行下单。",
+      "expected_output": "Explains local credential/profile setup, keeps secrets out of tracked files, and performs no side-effect run.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "运行今天的 broker daily inspection，使用指定设备，生成包含连通性、KSGT、资金、下单、撤单和结论的汇总报告。",
+      "expected_output": "Runs preflight, asks for/uses explicit side-effect confirmation, executes the profile workflow once, and provides dated evidence and summary paths.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "上一笔巡检在撤单后返回持仓时失败了，帮我诊断并决定是否修复；不要重复下单。",
+      "expected_output": "Inspects local evidence, classifies the failure, avoids retrying the order, and proposes a reviewed draft repair if safe.",
+      "files": []
+    }
+  ]
+}
