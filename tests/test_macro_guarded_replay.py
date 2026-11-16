@@ -344,3 +344,29 @@ def test_tap_selector_taps_when_skip_selector_is_absent():
 
     assert success
     assert player.driver.taps == [(630, 2300)]
+
+
+def test_tap_selector_optional_succeeds_when_selector_is_absent():
+    saved_state = normalize_ui_state(_raw_state_with_nodes([]))
+    player = MacroPlayer(delay_between_actions=0)
+    player.driver = FakeDriver([_raw_state_with_nodes([])])
+    macro_data = {
+        "macro_schema_version": "2.0",
+        "description": "collapse quote panel",
+        "actions": [
+            {
+                "action_type": "tap_selector",
+                "selector": {
+                    "resource_id": "com.example:id/label_right",
+                    "text": "收起",
+                },
+                "optional": True,
+                "pre_state": saved_state,
+            }
+        ],
+    }
+
+    success = asyncio.run(player.replay_macro(macro_data))
+
+    assert success
+    assert player.driver.taps == []

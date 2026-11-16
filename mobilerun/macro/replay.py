@@ -439,6 +439,12 @@ class MacroPlayer:
                     for node in state.get("nodes", [])
                     if all(node.get(key) == value for key, value in selector.items())
                 ]
+                if not matches and action.get("optional"):
+                    logger.info(
+                        "⏭️ Optional tap selector %s matched nothing; skipping",
+                        selector,
+                    )
+                    return True
                 if len(matches) != 1:
                     logger.error(
                         "❌ Selector matched %s nodes; refusing ambiguous tap: %s",
