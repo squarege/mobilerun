@@ -676,7 +676,7 @@ class MacroPlayer:
                         target_value,
                         difference,
                     )
-                    return False
+                    return bool(action.get("continue_on_mismatch", action.get("record_only", False)))
                 logger.info("✅ money sum verified: %s", calculated)
                 return True
 
@@ -992,6 +992,63 @@ class MacroPlayer:
                 action=self._journal_action(action),
             )
             success = await self.replay_action(action, current_state=current_state)
+            if not success and not self._is_high_risk(action) and self.on_mismatch == "recover":
+                try:
+                    failure_state = await self.get_current_state_snapshot()
+                except Exception:
+                    failure_state = current_state or {}
+                self.last_divergence = {
+                    "step": step_number,
+                    "step_index": step_index,
+                    "action_type": action_type,
+                    "reason": f"action failed: {action_type}",
+                    "score": None,
+                    "expected_pre_state": action.get("pre_state") or {},
+                    "observed_state": failure_state or {},
+                    "last_verified_checkpoint": result.last_verified_checkpoint,
+                    "remaining_actions": all_actions[step_index:],
+                }
+                divergence_artifacts = await self._capture_artifacts(
+                    step_index, "divergence", failure_state
+                )
+                self.journal.append("divergence", **self.last_divergence, **divergence_artifacts)
+                if recovery_attempts < self.max_recoveries and self.recovery_runner is not None:
+                    recovery_attempts += 1
+                    result.recovery_attempts = recovery_attempts
+                    outcome = await self._run_recovery(
+                        description=description,
+                        divergence=self.last_divergence,
+                        current_state=failure_state or {},
+                        remaining_actions=all_actions[step_index:],
+                        failed_step_index=step_index,
+                        failed_step_action=action,
+                        last_verified_checkpoint=result.last_verified_checkpoint,
+                        recovery_attempts=recovery_attempts,
+                        recovery_budget={
+                            "max_recoveries": self.max_recoveries,
+                            "max_actions": self.max_recovery_actions,
+                            "max_seconds": self.max_recovery_seconds,
+                        },
+                    )
+                    result.llm_calls += outcome.llm_calls
+                    self.journal.append(
+                        "recovery",
+                        step_index=step_index,
+                        status=outcome.status,
+                        reason=outcome.reason,
+                        agent_actions=outcome.agent_actions,
+                        llm_calls=outcome.llm_calls,
+                        metadata=outcome.metadata,
+                    )
+                    if outcome.recovered and outcome.agent_actions <= self.max_recovery_actions:
+                        success = await self.replay_action(action, current_state=None)
+                    elif outcome.status == "UNKNOWN_OUTCOME":
+                        return self._failed_result(
+                            result,
+                            offset,
+                            outcome.reason or outcome.status,
+                            status="UNKNOWN_OUTCOME",
+                        )
             if not success:
                 status = "UNKNOWN_OUTCOME" if self._is_high_risk(action) else "FAILED"
                 self.journal.append(
@@ -1229,17 +1286,20 @@ class MacroPlayer:
                 current = await state()
             account_nodes = nodes_with(
                 current,
-                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_info_view",
+                lambda node: node.get("resource_id") in {
+                    "com.hexin.plat.android:id/right_arrow_image",
+                    "com.hexin.plat.android:id/arrow_image",
+                },
             )
             if not account_nodes:
                 account_nodes = nodes_with(
                     current,
-                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_layout",
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_info_view",
                 )
             if not account_nodes:
                 account_nodes = nodes_with(
                     current,
-                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/arrow_image",
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/account_layout",
                 )
             if len(account_nodes) == 1:
                 bounds = account_nodes[0].get("bounds") or {}
@@ -1319,14 +1379,20 @@ class MacroPlayer:
             await asyncio.sleep(float(action.get("login_settle_seconds", 3.0)))
             current = await state()
 
-        title_nodes = nodes_with(
-            current,
-            lambda node: str(node.get("text") or "").strip() == broker_name
-            and node.get("resource_id") in {
-                "com.hexin.plat.android:id/page_title_view",
-                "com.hexin.plat.android:id/qs_name_text",
-            },
-        )
+        title_nodes = []
+        for _ in range(max(1, int(action.get("login_settle_polls", 10)))):
+            title_nodes = nodes_with(
+                current,
+                lambda node: str(node.get("text") or "").strip() == broker_name
+                and node.get("resource_id") in {
+                    "com.hexin.plat.android:id/page_title_view",
+                    "com.hexin.plat.android:id/qs_name_text",
+                },
+            )
+            if title_nodes:
+                break
+            await asyncio.sleep(float(action.get("login_poll_seconds", 0.5)))
+            current = await state()
         logged_in = len(title_nodes) == 1
         self.journal.append(
             "broker_session",
@@ -1362,10 +1428,10 @@ class MacroPlayer:
         nodes = state.get("nodes", [])
         history_text = str(action.get("history_header_text") or "其他")
         history_nodes = [node for node in nodes if str(node.get("text") or "") == history_text]
-        if len(history_nodes) != 1:
-            return None
-        history_top = cls._bounds_top(history_nodes[0].get("bounds"))
-        if history_top is None:
+        history_top = None
+        if len(history_nodes) == 1:
+            history_top = cls._bounds_top(history_nodes[0].get("bounds"))
+        elif not action.get("allow_missing_history_boundary", False):
             return None
         top_selector = action.get("content_top_selector") or {"text": "状态"}
         top_nodes = [
@@ -1392,7 +1458,9 @@ class MacroPlayer:
             if preferred and str(node.get("text") or "") != preferred:
                 continue
             top = cls._bounds_top(node.get("bounds"))
-            if top is None or not content_top <= top < history_top:
+            if top is None or top < content_top:
+                continue
+            if history_top is not None and top >= history_top:
                 continue
             candidates.append(node)
         return candidates[0] if len(candidates) == 1 else None

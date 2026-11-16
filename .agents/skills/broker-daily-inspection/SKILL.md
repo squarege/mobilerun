@@ -92,12 +92,12 @@ The workflow should perform these checks in order:
 1. Force-start the target app and converge from the home page to the trading tab.
 2. Accept an existing target-broker session or select and log in to the target broker; if the broker card is offscreen, use bounded list scrolling and stop when the list no longer moves.
 3. Capture broker-session evidence.
-4. Enter holdings and verify `available + market_value ~= total_assets` in code, before the order.
+4. Enter holdings and verify `available + market_value ~= total_assets` in code, before the order; record a mismatch and continue so the final report can show it.
 5. Open buy, inject stock code and quantity, and select the visible lower-limit/limit-down price.
 6. Copy the displayed lower-limit price into the order price field and verify exact equality in code; stop before submission on mismatch.
 7. Capture the filled order form and submit exactly once.
 8. Open current orders and verify a profile-allowed pending status.
-9. Select the unique profile-specified current-order cancel target, never a history control.
+9. Select the unique profile-specified current-order cancel target, never a history control. Modern current-order pages may omit a history header; in that case continue only when the profile explicitly allows the missing boundary and exactly one preferred target exists.
 10. Confirm cancellation and verify a profile-allowed cancelled status.
 11. Return to holdings and repeat the code-side funds check, then stop the app.
 
@@ -156,6 +156,11 @@ broker: funds before/after the side effect, the current-order page used for the
 order check, and the post-cancellation status page. Normal checks are omitted
 from the notes section; unexpected status text, mismatched funds, missing
 evidence, and failed side effects remain visible there.
+
+When `--on-divergence recover` is enabled, safe action failures such as session
+navigation or status observation can form a divergence and receive one bounded
+AI recovery attempt. High-risk order and cancellation failures never receive an
+automatic retry; they remain `UNKNOWN_OUTCOME` until the account is checked.
 
 Use `PASS` only when the required checks and cleanup passed. Use `WARN` for a recorded funds mismatch or an expected negative route result that still satisfies the profile. Use `FAILED` or `UNKNOWN_OUTCOME` for failed or uncertain side effects.
 

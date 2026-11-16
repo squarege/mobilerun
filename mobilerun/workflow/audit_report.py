@@ -181,8 +181,10 @@ def build_audit_row(run_dir: str | Path) -> dict[str, Any]:
     result_status = result.get("status")
     notes = _abnormal_notes(events, connectivity, route, funds, order, cancel, result_status)
     evidence = _evidence_screenshots(run_dir, events)
-    if result_status in {"INFRASTRUCTURE_ERROR", "BLOCKED"}:
+    if result_status in {"INFRASTRUCTURE_ERROR", "BLOCKED", "FAILED"}:
         conclusion = "失败"
+    elif result_status == "UNKNOWN_OUTCOME":
+        conclusion = "未知"
     elif any(value == "失败" for value in (connectivity, funds, order, cancel)):
         conclusion = "失败"
     elif any(value == "警告" for value in (funds,)):
@@ -228,6 +230,8 @@ def generate_audit_report(rows: list[dict[str, Any]], output: str | Path) -> Pat
     output.parent.mkdir(parents=True, exist_ok=True)
     passed = sum(row["conclusion"] == "PASS" for row in rows)
     failed = sum(row["conclusion"] == "失败" for row in rows)
+    warnings = sum(row["conclusion"] == "警告" for row in rows)
+    unknown = sum(row["conclusion"] == "未知" for row in rows)
     table_rows = []
     notes = []
     evidence_cards = []
@@ -260,13 +264,13 @@ def generate_audit_report(rows: list[dict[str, Any]], output: str | Path) -> Pat
     content = f"""<!doctype html>
 <html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>券商巡检汇总</title><style>
-body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:32px;color:#222}}h1{{font-size:24px;border-bottom:1px solid #777;padding-bottom:8px}}.summary{{font-size:18px;margin:12px 0 20px}}table{{border-collapse:collapse;width:100%;font-size:16px}}th,td{{border-bottom:1px solid #ddd;padding:9px 12px;text-align:left}}th{{font-weight:500}}td{{color:#333}}.status-pass,.status-通过,.status-是{{color:#16803a}}.status-警告{{color:#b36b00}}.status-失败{{color:#c62828}}.status-—{{color:#777}}ul{{padding-left:24px}}.broker-card{{margin-top:28px;border:1px solid #ddd;border-radius:8px;padding:16px}}.evidence-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}}.shots{{display:flex;gap:12px;flex-wrap:wrap}}figure{{margin:0;max-width:260px}}figure img{{width:100%;max-height:420px;object-fit:contain;border:1px solid #ddd;border-radius:6px;background:#f6f6f6}}figcaption{{font-size:13px;margin-top:4px;color:#555}}.muted{{color:#777}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:32px;color:#222}}h1{{font-size:24px;border-bottom:1px solid #777;padding-bottom:8px}}.summary{{font-size:18px;margin:12px 0 20px}}table{{border-collapse:collapse;width:100%;font-size:16px}}th,td{{border-bottom:1px solid #ddd;padding:9px 12px;text-align:left}}th{{font-weight:500}}td{{color:#333}}.status-pass,.status-通过,.status-是{{color:#16803a}}.status-警告{{color:#b36b00}}.status-失败{{color:#c62828}}.status-未知{{color:#8a4b08}}.status-—{{color:#777}}ul{{padding-left:24px}}.broker-card{{margin-top:28px;border:1px solid #ddd;border-radius:8px;padding:16px}}.evidence-grid{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}}.shots{{display:flex;gap:12px;flex-wrap:wrap}}figure{{margin:0;max-width:260px}}figure img{{width:100%;max-height:420px;object-fit:contain;border:1px solid #ddd;border-radius:6px;background:#f6f6f6}}figcaption{{font-size:13px;margin-top:4px;color:#555}}.muted{{color:#777}}
 </style></head><body><h1>券商巡检汇总</h1>
-<div class='summary'>通过 {passed} / 失败 {failed}（共 {len(rows)} 家券商）</div>
+<div class='summary'>通过 {passed} / 警告 {warnings} / 失败 {failed} / 未知 {unknown}（共 {len(rows)} 家券商）</div>
 <table><thead><tr><th>券商</th><th>站点连通性</th><th>登录到 KSGT</th><th>资金查询</th><th>下单</th><th>撤单</th><th>结论</th></tr></thead>
 <tbody>{''.join(table_rows) or '<tr><td colspan="7">没有运行记录</td></tr>'}</tbody></table>
 <h2>关键截图证据</h2>{''.join(evidence_cards) or '<p class="muted">没有截图证据</p>'}
 <h3>备注</h3><ul>{note_html}</ul></body></html>"""
     output.write_text(content, encoding="utf-8")
-    output.with_suffix(".json").write_text(json.dumps({"passed": passed, "failed": failed, "total": len(rows), "rows": rows}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    output.with_suffix(".json").write_text(json.dumps({"passed": passed, "warnings": warnings, "failed": failed, "unknown": unknown, "total": len(rows), "rows": rows}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return output

@@ -64,6 +64,36 @@ def test_verify_money_sum_fails_beyond_tolerance(tmp_path):
     assert event["verified"] is False
 
 
+def test_verify_money_sum_can_record_mismatch_without_stopping(tmp_path):
+    journal = tmp_path / "journal.jsonl"
+    player = MacroPlayer(journal_path=str(journal))
+    state = _state()
+    state["nodes"][2] = _node("1,300.00", 197, 650)
+
+    action = _action(continue_on_mismatch=True)
+    assert asyncio.run(player.replay_action(action, current_state=state)) is True
+    event = json.loads(journal.read_text().splitlines()[-1])
+    assert event["verified"] is False
+
+
+def test_active_cancel_target_accepts_missing_history_boundary_when_unique():
+    state = {
+        "nodes": [
+            {"text": "状态", "bounds": {"top": 376, "bottom": 481}},
+            {"text": "已申报(ETF基金)", "bounds": {"top": 562, "bottom": 620}},
+            {"text": "撤买", "resource_id": "com.hexin.plat.android:id/che_buy_tv", "bounds": {"top": 643, "bottom": 758}},
+        ]
+    }
+    action = {
+        "history_header_text": "其他",
+        "allow_missing_history_boundary": True,
+        "cancel_target_text": "撤买",
+    }
+    target = MacroPlayer._active_cancel_target(state, action)
+    assert target is not None
+    assert target["text"] == "撤买"
+
+
 def test_workflow_accepts_money_sum_action(tmp_path):
     source = tmp_path / "macro.json"
     source.write_text(
