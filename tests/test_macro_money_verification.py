@@ -185,6 +185,62 @@ def test_verify_nodes_text_equal_journals_price_mismatch(tmp_path):
     assert event["target_text"] == "0.338"
 
 
+def test_ensure_broker_session_scrolls_to_offscreen_broker(tmp_path):
+    class FakeDriver:
+        def __init__(self):
+            self.swipes = []
+            self.taps = []
+
+        async def tap(self, x, y):
+            self.taps.append((x, y))
+            return True
+
+        async def swipe(self, start_x, start_y, end_x, end_y, duration_ms):
+            self.swipes.append((start_x, start_y, end_x, end_y, duration_ms))
+            return True
+
+    account_state = {
+        "nodes": [
+            {"resource_id": "com.hexin.plat.android:id/account_info_view", "bounds": {"center_x": 500, "center_y": 200}}
+        ]
+    }
+    first_list_state = {
+        "nodes": [
+            {"resource_id": "com.hexin.plat.android:id/recyclerView", "bounds": {"left": 0, "top": 300, "right": 1080, "bottom": 2200}},
+            {"resource_id": "com.hexin.plat.android:id/txt_qsname", "text": "其他券商", "bounds": {"center_x": 500, "center_y": 700}},
+        ]
+    }
+    second_list_state = {
+        "nodes": [
+            {"resource_id": "com.hexin.plat.android:id/recyclerView", "bounds": {"left": 0, "top": 300, "right": 1080, "bottom": 2200}},
+            {"resource_id": "com.hexin.plat.android:id/txt_qsname", "text": "目标券商", "bounds": {"center_x": 500, "center_y": 700}},
+        ]
+    }
+    logged_in_state = {
+        "nodes": [
+            {"resource_id": "com.hexin.plat.android:id/page_title_view", "text": "目标券商", "bounds": {"center_x": 500, "center_y": 200}}
+        ]
+    }
+    states = iter([account_state, first_list_state, second_list_state, logged_in_state])
+    driver = FakeDriver()
+    player = MacroPlayer(journal_path=str(tmp_path / "journal.jsonl"))
+
+    async def fake_init():
+        return driver
+
+    async def fake_state():
+        return next(states)
+
+    player._initialize_driver = fake_init
+    player.get_current_state_snapshot = fake_state
+    action = {"broker_name": "目标券商", "max_broker_scrolls": 3, "scroll_settle_seconds": 0}
+
+    assert asyncio.run(player._ensure_broker_session(action)) is True
+    assert len(driver.swipes) == 1
+    events = [json.loads(line) for line in (tmp_path / "journal.jsonl").read_text().splitlines()]
+    assert any(event.get("event") == "broker_search" and event.get("found") for event in events)
+
+
 def test_workflow_accepts_session_and_order_status_actions(tmp_path):
     source = tmp_path / "macro.json"
     source.write_text(

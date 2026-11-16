@@ -90,7 +90,7 @@ uv run mobilerun workflow broker-run \
 The workflow should perform these checks in order:
 
 1. Force-start the target app and converge from the home page to the trading tab.
-2. Accept an existing target-broker session or select and log in to the target broker.
+2. Accept an existing target-broker session or select and log in to the target broker; if the broker card is offscreen, use bounded list scrolling and stop when the list no longer moves.
 3. Capture broker-session evidence.
 4. Enter holdings and verify `available + market_value ~= total_assets` in code, before the order.
 5. Open buy, inject stock code and quantity, and select the visible lower-limit/limit-down price.
@@ -107,6 +107,12 @@ parentheses. It does not match a different status such as a partial
 cancellation. Keep exact alternatives in the profile for statuses that do not
 have a parenthetical suffix; unexpected visible statuses are recorded as
 failures in the report.
+
+Broker selection is a bounded search, not a fixed visible-page lookup. It checks
+the current list, scrolls the detected list container a limited number of times,
+and requires one exact broker card. If the target is not found or multiple cards
+match, the session step fails before any order action and records the search
+result.
 
 Read `result.json` and `journal.jsonl` for the decision. A successful run should contain `broker_session`, two `money_verification` events, a pending `order_status_verification`, a `cancel_target`, and a cancelled `order_status_verification`. The run directory also contains state snapshots, screenshots, the HTML timeline, and `audit-summary.html`.
 

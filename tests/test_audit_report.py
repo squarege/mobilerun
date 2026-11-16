@@ -21,6 +21,7 @@ def test_audit_report_maps_journal_events_to_summary(tmp_path):
     assert row["broker"] == "Example Broker"
     assert row["conclusion"] == "PASS"
     assert row["notes"] == []
+    assert row["evidence"]["interruption"] == []
     output = generate_audit_report([row], tmp_path / "summary.html")
     assert output.exists()
     assert "Example Broker" in output.read_text()
@@ -73,3 +74,19 @@ def test_audit_report_groups_embedded_evidence_screenshots_by_broker(tmp_path):
     assert "关键截图证据" in content
     assert "资金查询（下单前）" in content
     assert "data:image/png;base64" in content
+
+
+def test_audit_report_shows_interruption_screenshot_only_for_failed_run(tmp_path):
+    run = tmp_path / "run"
+    (run / "artifacts" / "screenshots").mkdir(parents=True)
+    (run / "artifacts" / "screenshots" / "interrupted.png").write_bytes(b"png")
+    (run / "manifest.json").write_text(json.dumps({"run_id": "r4", "workflow_id": "audit", "parameters": {"broker_name": "Example Broker"}}))
+    (run / "result.json").write_text(json.dumps({"status": "UNKNOWN_OUTCOME"}))
+    events = [{"event": "interruption", "status": "UNKNOWN_OUTCOME", "screenshot_path": "artifacts/screenshots/interrupted.png"}]
+    (run / "journal.jsonl").write_text(json.dumps(events[0]) + "\n")
+
+    row = build_audit_row(run)
+    output = generate_audit_report([row], tmp_path / "summary.html")
+    content = output.read_text()
+    assert row["evidence"]["interruption"][0]["label"] == "中断时截图"
+    assert "中断时截图" in content

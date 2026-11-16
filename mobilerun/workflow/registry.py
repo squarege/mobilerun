@@ -356,6 +356,7 @@ class WorkflowRegistry:
             entry_ok, entry_reason = await self._check_completion(player, metadata["entry_check"])
             if not entry_ok:
                 result = RunResult(status="BLOCKED", total_steps=len(macro.get("actions", [])), failure_reason=entry_reason)
+                await player.capture_interruption(result.status, result.failure_reason)
                 self._write_json(run_dir / "result.json", result.as_dict())
                 manifest.update({"finished_at": time.time(), "status": result.status, "result_path": str(run_dir / "result.json"), "journal_path": str(run_dir / "journal.jsonl")})
                 self._write_json(run_dir / "manifest.json", manifest)
@@ -368,6 +369,8 @@ class WorkflowRegistry:
                 result.status = "FAILED"
                 result.failure_reason = reason
                 result.details["completion_check"] = "failed"
+        if not result.success:
+            await player.capture_interruption(result.status, result.failure_reason)
         if player.last_divergence is not None:
             journal_events = self._read_journal(Path(run_dir / "journal.jsonl"))
             recovery_actions = [

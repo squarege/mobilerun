@@ -353,6 +353,26 @@ class MacroPlayer:
             logger.debug("Could not capture %s artifact for step %s: %s", phase, step_index + 1, exc)
         return artifacts
 
+    async def capture_interruption(self, status: str, reason: str | None = None) -> Optional[str]:
+        """Capture the device screen when a run stops before normal completion."""
+        if self.artifacts_dir is None:
+            return None
+        screenshot_path = self.artifacts_dir / "screenshots" / "interrupted.png"
+        try:
+            driver = await self._initialize_driver()
+            screenshot_path.write_bytes(await driver.screenshot())
+        except Exception as exc:
+            logger.debug("Could not capture interruption screenshot: %s", exc)
+            return None
+        relative_path = str(screenshot_path.relative_to(self.artifacts_dir.parent))
+        self.journal.append(
+            "interruption",
+            status=status,
+            reason=reason,
+            screenshot_path=relative_path,
+        )
+        return relative_path
+
     async def replay_action(
         self, action: Dict[str, Any], current_state: Optional[Dict[str, Any]] = None
     ) -> bool:
@@ -1121,6 +1141,52 @@ class MacroPlayer:
             return re.search(pattern, normalized_text) is not None
         return re.fullmatch(pattern, normalized_text) is not None
 
+    @staticmethod
+    def _broker_nodes(state: Dict[str, Any], broker_name: str) -> list[Dict[str, Any]]:
+        return [
+            node
+            for node in state.get("nodes", [])
+            if str(node.get("text") or "").strip() == broker_name
+            and node.get("resource_id") in {
+                "com.hexin.plat.android:id/wt_multi_data_item_qs_name",
+                "com.hexin.plat.android:id/txt_qsname",
+            }
+        ]
+
+    @staticmethod
+    def _scroll_container_bounds(state: Dict[str, Any]) -> Optional[Dict[str, int]]:
+        candidates = []
+        for node in state.get("nodes", []):
+            resource_id = str(node.get("resource_id") or "").lower()
+            class_name = str(node.get("class") or node.get("class_name") or "").lower()
+            if not any(token in resource_id or token in class_name for token in ("recycler", "scroll", "list")):
+                continue
+            bounds = node.get("bounds") or {}
+            try:
+                area = (int(bounds["right"]) - int(bounds["left"])) * (
+                    int(bounds["bottom"]) - int(bounds["top"])
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if area > 0:
+                candidates.append((area, bounds))
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
+
+    @staticmethod
+    def _state_fingerprint(state: Dict[str, Any]) -> str:
+        values = []
+        for node in state.get("nodes", []):
+            values.append(
+                (
+                    node.get("text"),
+                    node.get("resource_id"),
+                    tuple(sorted((node.get("bounds") or {}).items())),
+                )
+            )
+        return json.dumps(values, ensure_ascii=False, sort_keys=True)
+
     async def _ensure_broker_session(self, action: Dict[str, Any]) -> bool:
         """Select and log into a broker when needed, while accepting an existing session."""
         driver = await self._initialize_driver()
@@ -1183,27 +1249,37 @@ class MacroPlayer:
             # Some app versions open directly on the broker list and expose
             # no account_info_view. Continue to the broker card lookup below.
 
-        broker_nodes = nodes_with(
-            current,
-            lambda node: str(node.get("text") or "").strip() == broker_name
-            and node.get("resource_id") in {
-                "com.hexin.plat.android:id/wt_multi_data_item_qs_name",
-                "com.hexin.plat.android:id/txt_qsname",
-            },
-        )
-        for _ in range(10):
-            if broker_nodes:
+        broker_nodes = self._broker_nodes(current, broker_name)
+        max_scrolls = max(0, int(action.get("max_broker_scrolls", 12)))
+        scroll_attempts = 0
+        previous_fingerprint = self._state_fingerprint(current)
+        while not broker_nodes and scroll_attempts < max_scrolls:
+            container = self._scroll_container_bounds(current)
+            bounds = container or {"left": 0, "top": 300, "right": 1080, "bottom": 2200}
+            try:
+                start_x = int((int(bounds["left"]) + int(bounds["right"])) / 2)
+                start_y = max(int(bounds["top"]) + 80, int(bounds["bottom"]) - 180)
+                end_y = min(int(bounds["bottom"]) - 80, int(bounds["top"]) + 260)
+            except (KeyError, TypeError, ValueError):
                 break
-            await asyncio.sleep(0.5)
+            if start_y <= end_y:
+                break
+            if await driver.swipe(start_x, start_y, start_x, end_y, int(action.get("scroll_duration_ms", 500))) is False:
+                break
+            scroll_attempts += 1
+            await asyncio.sleep(float(action.get("scroll_settle_seconds", 0.8)))
             current = await state()
-            broker_nodes = nodes_with(
-                current,
-                lambda node: str(node.get("text") or "").strip() == broker_name
-                and node.get("resource_id") in {
-                    "com.hexin.plat.android:id/wt_multi_data_item_qs_name",
-                    "com.hexin.plat.android:id/txt_qsname",
-                },
+            broker_nodes = self._broker_nodes(current, broker_name)
+            fingerprint = self._state_fingerprint(current)
+            self.journal.append(
+                "broker_search",
+                broker_name=broker_name,
+                scroll_attempt=scroll_attempts,
+                found=bool(broker_nodes),
             )
+            if fingerprint == previous_fingerprint:
+                break
+            previous_fingerprint = fingerprint
         if len(broker_nodes) > 1:
             return False
         if len(broker_nodes) == 1:

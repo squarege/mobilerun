@@ -78,7 +78,7 @@ def _evidence_screenshots(run_dir: Path, events: list[dict[str, Any]]) -> dict[s
         index = event.get("index")
         if isinstance(index, int):
             actions[index] = event["action"]
-    evidence: dict[str, list[dict[str, str]]] = {"funds": [], "order": [], "cancel": []}
+    evidence: dict[str, list[dict[str, str]]] = {"funds": [], "order": [], "cancel": [], "interruption": []}
     labels = {
         "funds_pre": ("资金查询（下单前）", "funds"),
         "funds_post": ("资金查询（撤单后）", "funds"),
@@ -86,6 +86,11 @@ def _evidence_screenshots(run_dir: Path, events: list[dict[str, Any]]) -> dict[s
         "cancel": ("撤单后状态页面", "cancel"),
     }
     for event in events:
+        if event.get("event") == "interruption" and event.get("screenshot_path"):
+            relative_path = str(event["screenshot_path"])
+            if (run_dir / relative_path).is_file():
+                evidence["interruption"].append({"label": "中断时截图", "path": relative_path})
+            continue
         if event.get("event") != "observation" or event.get("phase") != "post":
             continue
         action = actions.get(event.get("index"), {})
@@ -239,6 +244,15 @@ def generate_audit_report(rows: list[dict[str, Any]], output: str | Path) -> Pat
                         f"<figure><img src='{data_uri}' alt='{html.escape(item['label'])}'><figcaption>{html.escape(item['label'])}</figcaption></figure>"
                     )
             sections.append(f"<section><h4>{title}</h4><div class='shots'>{''.join(images) or '<span class=muted>无截图</span>'}</div></section>")
+        interruption_images = []
+        for item in (row.get("evidence") or {}).get("interruption", []):
+            data_uri = _screenshot_data_uri(Path(row["run_dir"]), item["path"])
+            if data_uri:
+                interruption_images.append(
+                    f"<figure><img src='{data_uri}' alt='中断时截图'><figcaption>中断时截图</figcaption></figure>"
+                )
+        if interruption_images:
+            sections.append(f"<section><h4>中断时截图</h4><div class='shots'>{''.join(interruption_images)}</div></section>")
         evidence_cards.append(
             f"<article class='broker-card'><h3>{html.escape(str(row['broker']))}</h3><div class='evidence-grid'>{''.join(sections)}</div></article>"
         )
