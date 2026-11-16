@@ -89,28 +89,11 @@ mobilerun workflow report order-search --run-id <run-id>
 
 恢复链路会记录 `recovery_start`、`recovery_prompt`、`recovery_llm`、`recovery_action` 和 `recovery_state` 事件。候选修复只写入 `repair_proposal.json`，默认 `auto_publish` 为 `false`；审核者需要确认前置状态、动作副作用和重复可行性后，再把候选动作导入新版本并重新验证。
 
-## 7. 交易类巡检的安全动作
+## 7. 领域工作流附录
 
-对资金或委托状态做核对时，不要让模型读取截图后心算。优先使用 `verify_money_sum`：它从当前 UI 状态中定位每个金额节点，由代码解析并求和，再把原始文本、来源、目标、差值、容差和结论写入 `money_verification` 事件。坐标应指向包含金额的最小文本节点，容差只用于处理显示舍入。
+具体业务工作流的检查项、状态文本、证据要求和副作用边界，放在对应的本地工作流目录中；`workflows/` 目录被 Git 忽略，不应把真实账号、凭证、截图、journal 或具体运行记录提交到仓库。
 
-撤销当前委托时，优先使用 `cancel_active_order`，不要录制或复用宽泛的历史撤单控件。该动作要求用唯一的“历史区标题”和“当前委托区顶部标记”限定搜索范围，只在两者之间寻找允许的撤单文本；当前区没有候选或候选超过一个时会拒绝执行。这个限制是为了避免把历史委托误判为当前委托。
-
-有真实交易副作用的工作流必须满足以下边界：
-
-- 同一次运行只允许一次委托提交；提交前先记录买入表单证据。
-- `allow_side_effect_retry` 保持 `false`；未知结果只能停止，不能自动重试。
-- `on_divergence` 使用 `stop`，恢复预算保持很小。
-- 委托状态、撤单动作和前后资金核对必须有截图或结构化 journal 证据。
-- 新版本先在真实业务窗口验证一次，再显式激活。
-- 每个券商账号只绑定一个设备和一份工作流，避免多设备重复操作同一账户。
-
-如果合同要求先在真实业务窗口验证，可以运行校验通过的 draft 一次：
-
-```bash
-mobilerun workflow run <workflow-id> --version <N> --device <serial> --allow-draft --on-divergence stop
-```
-
-这只会执行显式指定的 draft 版本，并在 `manifest.json` 中写入 `draft_validation: true`。验证通过后再显式激活；验证失败则保持 draft 并按运行证据修复。
+通用原则仍然适用于所有有副作用的工作流：副作用动作只执行一次，未知结果停止并等待人工核查，恢复预算保持有限，候选修复必须经过审核、校验和显式激活。具体业务规则由工作流自己的附录和 profile 定义。
 
 ## 8. 异常扫描与修复
 
@@ -142,28 +125,6 @@ mobilerun workflow activate <workflow-id> --version <new-version>
 
 `--create-draft` 不会自动激活。只有显式激活并在测试设备上重新验证通过后，才把异常标记为已修复。
 
-## 9. 多券商巡检
+## 9. 本地工作流说明
 
-使用一个通用工作流和本地券商 profile。profile 只保存券商显示名、凭证引用、状态文本和撤单区域边界；真实密码仍由凭证管理器提供，profile 文件位于被 Git 忽略的本地配置目录。
-
-执行完整巡检前，使用带有副作用确认的入口：
-
-```bash
-uv run mobilerun workflow broker-run \
-  --workflow broker-daily-inspection \
-  --broker <profile-id> \
-  --version <N> \
-  --device <serial> \
-  --confirm-side-effect \
-  --on-divergence stop
-```
-
-这个入口会处理已登录和需要切换/登录两种状态，执行一次下限价委托和撤单，并在单次运行目录中生成时间线报告和 `audit-summary.html`。不同券商的运行结果可以汇总为类似巡检表的报告；不指定 `--output` 时，汇总报告写入 workflow 的 `reports/YYYY-MM-DD.html`，同一天重复生成会追加 `_02`、`_03` 后缀：
-
-```bash
-uv run mobilerun workflow audit-report \
-  --workflow broker-daily-inspection \
-  --run broker-daily-inspection:<run-id>
-```
-
-汇总列包括站点连通性、KSGT 路由、资金查询、下单、撤单和最终结论；资金差异会写入备注。完整巡检只在确认委托和撤单风险后执行，未知副作用结果不会自动重试。
+需要业务术语、profile 字段和运行命令时，优先读取目标工作流目录中的说明和本地配置，再使用对应的 Agent skill 执行。这样通用引擎文档不会随着某个业务工作流的状态文本或检查表变化而膨胀。

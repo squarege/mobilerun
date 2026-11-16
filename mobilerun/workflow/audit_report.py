@@ -45,12 +45,52 @@ def _funds(events: list[dict[str, Any]]) -> tuple[str, list[str]]:
         return "—", []
     notes = []
     for event in checks:
+        if event.get("verified"):
+            continue
         calculated = event.get("calculated_value")
         target = event.get("target_value")
         difference = event.get("difference")
         label = event.get("label") or "资金核算"
         notes.append(f"{label}: 可用+总市值={calculated}, 总资产={target}, 差值={difference}")
     return ("通过" if all(event.get("verified") for event in checks) else "警告"), notes
+
+
+def _status_evidence(events: list[dict[str, Any]], event_name: str, phase: str | None = None) -> str:
+    matches = [event for event in events if event.get("event") == event_name]
+    if phase is not None:
+        matches = [event for event in matches if event.get("phase") == phase]
+    observed = []
+    for event in matches:
+        observed.extend(str(value) for value in event.get("observed_statuses") or [])
+    if observed:
+        return f"；观察到状态：{'、'.join(dict.fromkeys(observed))}"
+    return ""
+
+
+def _abnormal_notes(
+    events: list[dict[str, Any]],
+    connectivity: str,
+    route: str,
+    funds: str,
+    order: str,
+    cancel: str,
+    result_status: str | None,
+) -> list[str]:
+    notes: list[str] = []
+    if connectivity != "通过":
+        notes.append(f"站点连通性：{connectivity}{_status_evidence(events, 'broker_session')}")
+    if route in {"失败", "—"}:
+        notes.append(f"登录到 KSGT：{route}{_status_evidence(events, 'order_status_verification', 'route')}")
+    if funds == "警告":
+        _, fund_notes = _funds(events)
+        notes.extend(fund_notes)
+    if order != "通过":
+        notes.append(f"下单状态：{order}{_status_evidence(events, 'order_status_verification', 'pending')}")
+    if cancel != "通过":
+        notes.append(f"撤单状态：{cancel}{_status_evidence(events, 'order_status_verification', 'cancelled')}")
+    if result_status not in {None, "MACRO_SUCCESS", "SUCCESS"}:
+        notes.append(f"运行状态：{result_status}")
+    return notes
 
 
 def _route(events: list[dict[str, Any]]) -> str:
@@ -74,11 +114,14 @@ def build_audit_row(run_dir: str | Path) -> dict[str, Any]:
     events = _events(run_dir)
     parameters = manifest.get("parameters") or {}
     broker_name = parameters.get("broker_name") or parameters.get("broker_id") or manifest.get("workflow_id", "—")
-    funds, notes = _funds(events)
+    funds, _ = _funds(events)
     connectivity = _column(events, "broker_session")
     order = _column(events, "order_status_verification", "pending")
     cancel = _column(events, "order_status_verification", "cancelled")
-    if result.get("status") in {"INFRASTRUCTURE_ERROR", "BLOCKED"}:
+    route = _route(events)
+    result_status = result.get("status")
+    notes = _abnormal_notes(events, connectivity, route, funds, order, cancel, result_status)
+    if result_status in {"INFRASTRUCTURE_ERROR", "BLOCKED"}:
         conclusion = "失败"
     elif any(value == "失败" for value in (connectivity, funds, order, cancel)):
         conclusion = "失败"
@@ -91,7 +134,7 @@ def build_audit_row(run_dir: str | Path) -> dict[str, Any]:
     return {
         "broker": broker_name,
         "connectivity": connectivity,
-        "ksgt": _route(events),
+        "ksgt": route,
         "funds": funds,
         "order": order,
         "cancel": cancel,
@@ -99,7 +142,7 @@ def build_audit_row(run_dir: str | Path) -> dict[str, Any]:
         "notes": notes,
         "run_id": manifest.get("run_id", run_dir.name),
         "run_dir": str(run_dir),
-        "status": result.get("status"),
+        "status": result_status,
     }
 
 
@@ -129,7 +172,7 @@ def generate_audit_report(rows: list[dict[str, Any]], output: str | Path) -> Pat
     for row in rows:
         table_rows.append("<tr>" + "".join(f"<td class='status-{html.escape(str(row[key])).lower()}'>{html.escape(str(row[key]))}</td>" for key in ("broker", "connectivity", "ksgt", "funds", "order", "cancel", "conclusion")) + "</tr>")
         notes.extend(f"{row['broker']}：{note}" for note in row.get("notes", []))
-    note_html = "".join(f"<li>{html.escape(note)}</li>" for note in notes) or "<li>无资金差异记录</li>"
+    note_html = "".join(f"<li>{html.escape(note)}</li>" for note in notes) or "<li>无异常记录</li>"
     content = f"""<!doctype html>
 <html lang='zh-CN'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>券商巡检汇总</title><style>
