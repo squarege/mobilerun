@@ -63,6 +63,7 @@ class MacroPlayer:
         max_recoveries: int = 1,
         max_recovery_actions: int = 5,
         max_recovery_seconds: float = 45.0,
+        app_package: Optional[str] = None,
     ):
         """
         Initialize the MacroPlayer.
@@ -87,6 +88,7 @@ class MacroPlayer:
         self.max_recoveries = max(0, max_recoveries)
         self.max_recovery_actions = max(0, max_recovery_actions)
         self.max_recovery_seconds = max(0.0, max_recovery_seconds)
+        self.app_package = app_package
         self.journal = RunJournal(journal_path)
         self.artifacts_dir = Path(artifacts_dir) if artifacts_dir else None
         if self.artifacts_dir:
@@ -121,8 +123,14 @@ class MacroPlayer:
                     await retry_driver.connect()
                     if getattr(retry_driver, "portal", None) is not None:
                         self.driver = retry_driver
+                        if self.app_package and getattr(self.driver, "device", None) is not None:
+                            await self.driver.device.shell(f"monkey -p {self.app_package} 1")
+                            await asyncio.sleep(1.0)
                 except Exception:
                     logger.debug("Portal retry connect failed", exc_info=True)
+            if self.app_package and getattr(self.driver, "device", None) is not None:
+                await self.driver.device.shell(f"monkey -p {self.app_package} 1")
+                await asyncio.sleep(1.0)
             if self.driver.portal is not None:
                 logger.info(
                     f"🤖 Initialized driver for device: {self.device_serial} (Portal)"
@@ -167,11 +175,11 @@ class MacroPlayer:
 
         config_path = self.config_path
         if config_path is None:
-            user_config_path = ConfigLoader.get_user_config_path()
-            if not user_config_path.exists():
+            default_config_path = ConfigLoader.get_default_config_path()
+            if not default_config_path.exists():
                 self._credential_load_error = "no Mobilerun config file was found"
                 return None
-            config_path = str(user_config_path)
+            config_path = str(default_config_path)
 
         try:
             config = ConfigLoader.load(config_path)
@@ -1087,7 +1095,11 @@ class MacroPlayer:
         title_nodes = nodes_with(
             current,
             lambda node: str(node.get("text") or "").strip() == broker_name
-            and node.get("resource_id") in {"com.hexin.plat.android:id/page_title_view", "com.hexin.plat.android:id/qs_name"},
+            and node.get("resource_id") in {
+                "com.hexin.plat.android:id/page_title_view",
+                "com.hexin.plat.android:id/qs_name",
+                "com.hexin.plat.android:id/qs_name_text",
+            },
         )
         password_nodes = nodes_with(
             current,
@@ -1105,13 +1117,16 @@ class MacroPlayer:
                 await driver.tap(int(bounds["center_x"]), int(bounds["center_y"]))
                 await asyncio.sleep(float(action.get("settle_seconds", 1.0)))
                 current = await state()
-            else:
-                return False
+            # Some app versions open directly on the broker list and expose
+            # no account_info_view. Continue to the broker card lookup below.
 
         broker_nodes = nodes_with(
             current,
             lambda node: str(node.get("text") or "").strip() == broker_name
-            and node.get("resource_id") == "com.hexin.plat.android:id/wt_multi_data_item_qs_name",
+            and node.get("resource_id") in {
+                "com.hexin.plat.android:id/wt_multi_data_item_qs_name",
+                "com.hexin.plat.android:id/txt_qsname",
+            },
         )
         if len(broker_nodes) > 1:
             return False
@@ -1137,9 +1152,14 @@ class MacroPlayer:
             current = await state()
             login_nodes = nodes_with(
                 current,
-                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_btn_login"
-                or str(node.get("text") or "").strip() == "登录",
+                lambda node: node.get("resource_id") == "com.hexin.plat.android:id/weituo_btn_login",
             )
+            if not login_nodes:
+                login_nodes = nodes_with(
+                    current,
+                    lambda node: node.get("resource_id") == "com.hexin.plat.android:id/keyboard_key_imeaction"
+                    and str(node.get("text") or "").strip() == "登录",
+                )
             if len(login_nodes) != 1:
                 return False
             bounds = login_nodes[0].get("bounds") or {}
@@ -1150,7 +1170,10 @@ class MacroPlayer:
         title_nodes = nodes_with(
             current,
             lambda node: str(node.get("text") or "").strip() == broker_name
-            and node.get("resource_id") == "com.hexin.plat.android:id/page_title_view",
+            and node.get("resource_id") in {
+                "com.hexin.plat.android:id/page_title_view",
+                "com.hexin.plat.android:id/qs_name_text",
+            },
         )
         logged_in = len(title_nodes) == 1
         self.journal.append(
@@ -1208,10 +1231,13 @@ class MacroPlayer:
         raw_allowed = action.get("allowed_cancel_texts")
         if isinstance(raw_allowed, str):
             raw_allowed = raw_allowed.split("|")
-        allowed_texts = set(raw_allowed or ["买入全部撤单", "卖出全部撤单", "买入撤单", "卖出撤单"])
+        allowed_texts = set(raw_allowed or ["全撤", "撤买", "撤卖", "买入全部撤单", "卖出全部撤单", "买入撤单", "卖出撤单"])
+        preferred = str(action.get("cancel_target_text") or "").strip()
         candidates = []
         for node in nodes:
             if str(node.get("text") or "") not in allowed_texts:
+                continue
+            if preferred and str(node.get("text") or "") != preferred:
                 continue
             top = cls._bounds_top(node.get("bounds"))
             if top is None or not content_top <= top < history_top:

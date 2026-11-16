@@ -347,6 +347,7 @@ class WorkflowRegistry:
             max_recoveries=int(policy.get("max_recoveries", 1)),
             max_recovery_actions=int(policy.get("max_agent_actions_per_recovery", 5)),
             max_recovery_seconds=float(policy.get("max_recovery_seconds", 45)),
+            app_package=(metadata.get("entry_check") or {}).get("package"),
         )
         if metadata.get("entry_check"):
             entry_ok, entry_reason = await self._check_completion(player, metadata["entry_check"])
