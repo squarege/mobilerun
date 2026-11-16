@@ -1335,6 +1335,9 @@ class MacroPlayer:
                 "com.hexin.plat.android:id/page_title_view",
                 "com.hexin.plat.android:id/qs_name",
                 "com.hexin.plat.android:id/qs_name_text",
+                # 快速柜台(极速版) panel renders the broker name with this id
+                # until the standard account panel finishes loading.
+                "com.hexin.plat.android:id/txt_qsname",
             },
         )
         password_nodes = nodes_with(
@@ -1490,6 +1493,9 @@ class MacroPlayer:
                 and node.get("resource_id") in {
                     "com.hexin.plat.android:id/page_title_view",
                     "com.hexin.plat.android:id/qs_name_text",
+                    # 快速柜台(极速版) panel renders the broker name with this
+                    # id until the standard account panel finishes loading.
+                    "com.hexin.plat.android:id/txt_qsname",
                 },
             )
             if title_nodes:
