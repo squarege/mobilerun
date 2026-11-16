@@ -191,6 +191,28 @@ def test_verify_order_status_allows_parenthetical_wildcard_but_rejects_partial_s
     assert event["observed_candidates"] == ["部分撤单（基金）"]
 
 
+def test_verify_order_status_does_not_use_unrelated_order_status(tmp_path):
+    journal = tmp_path / "journal.jsonl"
+    player = MacroPlayer(journal_path=str(journal))
+    action = {
+        "action_type": "verify_order_status",
+        "phase": "pending",
+        "status_texts": "已申报(*)",
+        "target_texts": "目标 ETF",
+    }
+    state = {
+        "nodes": [
+            {"text": "其他 ETF", "bounds": {"top": 500, "bottom": 560}},
+            {"text": "已申报(其他基金)", "bounds": {"top": 560, "bottom": 620}},
+        ]
+    }
+
+    assert asyncio.run(player.replay_action(action, current_state=state)) is False
+    event = json.loads(journal.read_text().splitlines()[-1])
+    assert event["target_found"] is False
+    assert event["observed_statuses"] == []
+
+
 def test_verify_nodes_text_equal_journals_price_mismatch(tmp_path):
     journal = tmp_path / "journal.jsonl"
     player = MacroPlayer(journal_path=str(journal))

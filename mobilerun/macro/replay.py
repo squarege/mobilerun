@@ -687,6 +687,17 @@ class MacroPlayer:
                     raw_statuses = raw_statuses.split("|")
                 expected = [str(value).strip() for value in raw_statuses if str(value).strip()]
                 mode = action.get("match_mode", "contains")
+                raw_targets = action.get("target_texts", [])
+                if isinstance(raw_targets, str):
+                    raw_targets = raw_targets.split("|")
+                target_texts = [str(value).strip() for value in raw_targets if str(value).strip()]
+                target_nodes = []
+                if target_texts:
+                    target_nodes = [
+                        node
+                        for node in state.get("nodes", [])
+                        if any(self._status_matches(str(node.get("text") or "").strip(), target, mode) for target in target_texts)
+                    ]
                 matches = []
                 observed_candidates = []
                 phase_keywords = {
@@ -697,6 +708,20 @@ class MacroPlayer:
                     text = str(node.get("text") or "").strip()
                     if not text:
                         continue
+                    if target_texts and not target_nodes:
+                        continue
+                    if target_texts and target_nodes:
+                        bounds = node.get("bounds") or {}
+                        try:
+                            node_center_y = (int(bounds["top"]) + int(bounds["bottom"])) / 2
+                            in_target_row = any(
+                                abs(node_center_y - ((int(target.get("bounds", {}).get("top", 0)) + int(target.get("bounds", {}).get("bottom", 0))) / 2)) <= 140
+                                for target in target_nodes
+                            )
+                        except (TypeError, ValueError):
+                            in_target_row = False
+                        if not in_target_row:
+                            continue
                     if phase_keywords and any(keyword in text for keyword in phase_keywords):
                         observed_candidates.append(text)
                     if any(self._status_matches(text, candidate, mode) for candidate in expected):
@@ -707,6 +732,8 @@ class MacroPlayer:
                     label=action.get("label", "order status"),
                     phase=action.get("phase"),
                     expected_statuses=expected,
+                    target_texts=target_texts,
+                    target_found=bool(target_nodes),
                     observed_statuses=sorted(set(matches)),
                     observed_candidates=sorted(set(observed_candidates)),
                     verified=verified,
