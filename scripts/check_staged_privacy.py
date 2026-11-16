@@ -17,7 +17,8 @@ _PRIVATE_WORKFLOW_MARKERS = (
 )
 _SECRET_ASSIGNMENT = re.compile(
     r"(?P<name>api[_-]?key|auth[_-]?token|access[_-]?token|password|passwd|"
-    r"secret(?![_-]?id)|private[_-]?key)\s*[:=]\s*[\"']?(?P<value>[^\s,\"']+)",
+    r"secret(?![_-]?id)|private[_-]?key)\s*[:=]\s*[\"']?"
+    r"(?P<value>[^\s,\"'(]+)(?![\w.\-]*\()",
     re.IGNORECASE,
 )
 _TOKEN_PATTERNS = (

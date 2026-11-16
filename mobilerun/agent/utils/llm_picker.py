@@ -51,6 +51,7 @@ from mobilerun.agent.providers.registry import (
     normalize_model_id_for_variant,
 )
 from mobilerun.agent.usage import track_usage
+from mobilerun.agent.utils.ipv4_preference import prefer_ipv4_when_supported
 
 if TYPE_CHECKING:
     from mobilerun.config_manager.config_manager import LLMProfile
@@ -782,6 +783,8 @@ def load_llm(provider_name: str, model: str | None = None, **kwargs: Any) -> LLM
     """
     if not provider_name:
         raise ValueError("provider_name cannot be empty.")
+
+    prefer_ipv4_when_supported()
 
     provider_name = normalize_provider_name(provider_name)
     tool_protocol = kwargs.pop("tool_protocol", None)

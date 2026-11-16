@@ -36,6 +36,17 @@ def test_placeholders_are_allowed_but_real_credentials_are_rejected():
     assert checker.check_text("config.yaml", 'api_key: "' + live_value + '"')
 
 
+def test_code_expressions_after_assignment_are_allowed():
+    checker = _checker()
+    source = (
+        "def f(kwargs):\n"
+        "    api_key = kwargs.get('api_key')\n"
+        "    api_key = os.environ.get('API_KEY')\n"
+        "    token = build_token()\n"
+    )
+    assert checker.check_text("source.py", source) == []
+
+
 def test_local_paths_and_device_serials_are_rejected():
     checker = _checker()
     local_path = "/" + "Users/alice/project"
