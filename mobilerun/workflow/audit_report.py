@@ -60,6 +60,8 @@ def _route(events: list[dict[str, Any]]) -> str:
     observed = " ".join(" ".join(event.get("observed_statuses") or []) for event in route_events)
     if "KSGT" in observed.upper() or "快速" in observed:
         return "是"
+    if "已申报" in observed and "未报" not in observed:
+        return "是"
     if "集中" in observed or "未报" in observed:
         return "否"
     return "通过" if all(event.get("verified") for event in route_events) else "失败"
