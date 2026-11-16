@@ -253,3 +253,94 @@ def test_type_secret_replay_fails_without_typing_when_secret_missing():
 
     assert not success
     assert player.driver.inputs == []
+
+
+def _raw_state_with_nodes(extra_nodes):
+    state = _raw_state()
+    state["a11y_tree"][0]["resourceId"] = "com.example:id/title"
+    state["a11y_tree"][0]["text"] = "交易"
+    state["a11y_tree"][0]["bounds"] = "500,2270,760,2330"
+    state["a11y_tree"].extend(extra_nodes)
+    return state
+
+
+def test_tap_selector_skips_when_skip_selector_is_visible():
+    saved_state = normalize_ui_state(
+        _raw_state_with_nodes(
+            [
+                {
+                    "resourceId": "com.example:id/txt_qsname",
+                    "className": "android.widget.TextView",
+                    "text": "国元证券",
+                    "clickable": False,
+                    "enabled": True,
+                    "bounds": "10,300,300,360",
+                }
+            ]
+        )
+    )
+    player = MacroPlayer(delay_between_actions=0)
+    player.driver = FakeDriver(
+        [_raw_state_with_nodes(
+            [
+                {
+                    "resourceId": "com.example:id/txt_qsname",
+                    "className": "android.widget.TextView",
+                    "text": "国元证券",
+                    "clickable": False,
+                    "enabled": True,
+                    "bounds": "10,300,300,360",
+                }
+            ]
+        )]
+    )
+    macro_data = {
+        "macro_schema_version": "2.0",
+        "description": "trade tab",
+        "actions": [
+            {
+                "action_type": "tap_selector",
+                "selector": {
+                    "resource_id": "com.example:id/title",
+                    "text": "交易",
+                },
+                "skip_when_visible": [
+                    {"resource_id": "com.example:id/txt_qsname"}
+                ],
+                "pre_state": saved_state,
+            }
+        ],
+    }
+
+    success = asyncio.run(player.replay_macro(macro_data))
+
+    assert success
+    assert player.driver.taps == []
+
+
+def test_tap_selector_taps_when_skip_selector_is_absent():
+    saved_state = normalize_ui_state(_raw_state_with_nodes([]))
+    player = MacroPlayer(delay_between_actions=0)
+    player.driver = FakeDriver([_raw_state_with_nodes([])])
+    macro_data = {
+        "macro_schema_version": "2.0",
+        "description": "trade tab",
+        "actions": [
+            {
+                "action_type": "tap_selector",
+                "selector": {
+                    "resource_id": "com.example:id/title",
+                    "text": "交易",
+                },
+                "skip_when_visible": [
+                    {"resource_id": "com.example:id/txt_qsname"}
+                ],
+                "pre_state": saved_state,
+            }
+        ],
+    }
+
+    success = asyncio.run(player.replay_macro(macro_data))
+
+    assert success
+    assert player.driver.taps == [(630, 2300)]

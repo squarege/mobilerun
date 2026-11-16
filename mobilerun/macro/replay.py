@@ -418,6 +418,22 @@ class MacroPlayer:
             elif action_type == "tap_selector":
                 selector = action.get("selector") or {}
                 state = current_state or await self.get_current_state_snapshot()
+                skip_selectors = action.get("skip_when_visible") or []
+                if isinstance(skip_selectors, dict):
+                    skip_selectors = [skip_selectors]
+                for skip in skip_selectors:
+                    skip_matches = [
+                        node
+                        for node in state.get("nodes", [])
+                        if all(node.get(key) == value for key, value in skip.items())
+                    ]
+                    if skip_matches:
+                        logger.info(
+                            "⏭️ Skipping tap on %s; skip selector visible: %s",
+                            selector,
+                            skip,
+                        )
+                        return True
                 matches = [
                     node
                     for node in state.get("nodes", [])
